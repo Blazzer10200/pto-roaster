@@ -1,3 +1,5 @@
+import { apiUrl } from './api-config.js';
+import { rosterPage, rosterRows, memberForm, gangSettings } from './roster.js';
 import { CloudLedger } from './cloud.js';
 import { mountPlayerPicker } from './player-picker.js';
 import { cents, total, paid, balance, validatePurchase, addPayment, validateBackup, freshData, contactBalance, payContact } from './model.js';
@@ -10,7 +12,8 @@ const icon = (name, size=20) => `<svg width="${size}" height="${size}" viewBox="
 let mode, data, loadError = '', cloud=null, saving=false;
 try { mode = localStorage.getItem('bandbook-mode') || 'demo'; const raw=localStorage.getItem('bandbook-'+mode); data=raw ? validateBackup(JSON.parse(raw)) : freshData(mode==='demo'); }
 catch { mode='demo';data=freshData(true);loadError='Saved data could not be loaded. The original storage has been left untouched. Export or recover it before saving new changes.'; }
-let page='overview', filter='all', search='', draft={}, draftContact='', draftNotes='', draftPaid='';
+let memberFilter='current', memberSearch='';
+let page='roster', filter='all', search='', draft={}, draftContact='', draftNotes='', draftPaid='';
 const key = () => 'bandbook-'+mode;
 async function commit(next) {
   if (saving) return false;
@@ -19,7 +22,7 @@ async function commit(next) {
   document.querySelectorAll('button,input,textarea').forEach(el=>el.disabled=true);
   if ($('#connection-status')) $('#connection-status').textContent='Saving…';
   try {
-    validateBackup(next);
+    next=validateBackup(next);
     if(cloud) data=validateBackup(await cloud.save(next));
     else {localStorage.setItem(key(),JSON.stringify(next));data=next;}
     if ($('#connection-status')) $('#connection-status').textContent=cloud?'Saved online':'Saved in this browser';
@@ -42,15 +45,15 @@ const status = p => balance(p)===0 ? '<span class="status settled"><i></i>Paid</
 function toast(message) { $('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('visible'),5000); }
 function go(next) { page=next==='purchase'?'overview':next;search='';filter='all';render();window.scrollTo({top:0}); }
 function render() {
-  const pages={overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage};
-  $('#app').innerHTML=`<header class="simple-header"><a class="brand" href="#" data-page="overview"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a><nav aria-label="Main navigation">${[['overview','plus','Record bands'],['contacts','people','Players'],['history','history','Ledger'],['settings','settings','Settings']].map(([id,ic,label])=>`<button data-page="${id}" class="simple-nav ${page===id?'active':''}" ${page===id?'aria-current="page"':''}>${icon(ic,18)}<span>${label}</span></button>`).join('')}</nav></header><div class="simple-shell"><main>${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${mode==='demo'?'<div class="demo-banner"><span>Sample data · Try it out here.</span><button class="text-button" data-action="switch">Start my ledger '+icon('arrow',15)+'</button></div>':''}${pages[page]()}</main><footer><span>In-game dollars · <span id="connection-status">${cloud?'Saved online':mode==='demo'?'Demo data':'Saved in this browser'}</span></span><div class="footer-links"><button class="text-button" data-page="settings">Backups & settings</button>${cloud?'<button class="text-button" data-action="reload">Reload latest</button>':''}</div></footer></div>`;
+  const pages={roster:()=>rosterPage(data,memberSearch,memberFilter),overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage};
+  $('#app').innerHTML=`<header class="simple-header"><a class="brand" href="#" data-page="roster"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a><nav aria-label="Main navigation">${[['roster','people','Roster'],['overview','wallet','Bands'],['history','history','Ledger'],['settings','settings','Settings']].map(([id,ic,label])=>`<button data-page="${id}" class="simple-nav ${(page===id||(id==='history'&&page==='contacts'))?'active':''}" ${(page===id||(id==='history'&&page==='contacts'))?'aria-current="page"':''}>${icon(ic,18)}<span>${label}</span></button>`).join('')}</nav></header><div class="simple-shell"><main>${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${mode==='demo'?'<div class="demo-banner"><span>Sample data · Try it out here.</span><button class="text-button" data-action="switch">Start my ledger '+icon('arrow',15)+'</button></div>':''}${pages[page]()}</main><footer><span>In-game dollars · <span id="connection-status">${cloud?'Saved online':mode==='demo'?'Demo data':'Saved in this browser'}</span></span><div class="footer-links"><button class="text-button" data-page="settings">Backups & settings</button>${cloud?'<button class="text-button" data-action="reload">Reload latest</button>':''}</div></footer></div>`;
   bindForms();updateCalculator();
 }
 function title(eyebrow,heading,description,actions='') {
   return `<div class="page-heading"><div><h1>${heading}</h1><p>${description}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
 function overview() {
-  return title('','Record bands','Choose a player, enter their bands, and save.')+`<div class="overview-grid">${calculator()}${owedPanel()}</div>`;
+  return title('','Record bands','Choose a player, enter their bands, and save.',`<button class="button secondary" data-page="contacts">Player balances →</button>`)+`<div class="overview-grid">${calculator()}${owedPanel()}</div>`;
 }
 function owedPanel() {
   const people=data.contacts.map(c=>({...c,owed:contactBalance(data.purchases,c.id)})).filter(c=>c.owed>0).sort((a,b)=>b.owed-a.owed);
@@ -65,18 +68,18 @@ function table(records) {
 }
 function filteredPurchases(){return [...data.purchases].sort((a,b)=>Date.parse(b.date)-Date.parse(a.date)).filter(p=>(filter==='all'||(filter==='open'?balance(p)>0:balance(p)===0))&&`${contact(p.contactId)?.name} ${p.notes}`.toLowerCase().includes(search.toLowerCase()));}
 function historyPage() {
-  return title('','Ledger','All recorded bands and payments.',`<button class="button primary" data-page="overview">${icon('plus',18)} Record bands</button>`)+`<section class="panel"><div class="list-toolbar"><div class="tabs">${[['all','All'],['open','Unpaid'],['paid','Paid']].map(([id,label])=>`<button class="${filter===id?'selected':''}" data-filter="${id}">${label}</button>`).join('')}</div><label class="search-field">${icon('search',17)}<input id="history-search" placeholder="Search players or notes" value="${esc(search)}" aria-label="Search ledger"></label></div><div id="history-results">${table(filteredPurchases())}</div></section>`;
+  return title('','Ledger','All recorded bands and payments.',`<button class="button secondary" data-page="contacts">Player balances</button><button class="button primary" data-page="overview">${icon('plus',18)} Record bands</button>`)+`<section class="panel"><div class="list-toolbar"><div class="tabs">${[['all','All'],['open','Unpaid'],['paid','Paid']].map(([id,label])=>`<button class="${filter===id?'selected':''}" data-filter="${id}">${label}</button>`).join('')}</div><label class="search-field">${icon('search',17)}<input id="history-search" placeholder="Search players or notes" value="${esc(search)}" aria-label="Search ledger"></label></div><div id="history-results">${table(filteredPurchases())}</div></section>`;
 }
 function contactCards() {
   const people=data.contacts.filter(c=>`${c.name} ${c.notes}`.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>contactBalance(data.purchases,b.id)-contactBalance(data.purchases,a.id)||a.name.localeCompare(b.name));
   return people.length?people.map((c,i)=>`<button class="player-row" data-contact="${esc(c.id)}">${avatar(c,i)}<strong>${esc(c.name)}</strong><span class="player-balance"><strong class="${contactBalance(data.purchases,c.id)?'amber':'lime'}">${money(contactBalance(data.purchases,c.id))}</strong><small>Owed</small></span>${icon('chevron',16)}</button>`).join(''):'<div class="empty"><h3>No players found.</h3><p>Add a player or change your search.</p></div>';
 }
 function contactsPage() {
-  return title('','Players','Open a player to see their history or record a payment.',`<button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
+  return title('','Player balances','Band accounts for members and other players.',`<button class="button secondary" data-page="history">Ledger</button><button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
 }
 function bandSetting(b){return `<div class="setting-band" data-setting-band="${esc(b.id)}"><input type="color" name="color" value="${b.color}" aria-label="Band color"><input name="bandname" aria-label="Band name" value="${esc(b.name)}" maxlength="40" required><label class="money-input"><span>$</span><input name="price" aria-label="Default unit price" value="${b.price/100}" type="number" min="0" max="1000000000" step="0.01" required></label><label class="toggle-label"><input type="checkbox" name="active" ${b.active?'checked':''}> Active</label><button type="button" class="icon-button" data-move="up" aria-label="Move band up">↑</button><button type="button" class="icon-button" data-move="down" aria-label="Move band down">↓</button></div>`;}
 function settingsPage() {
-  return title('','Settings','Update band prices and keep a backup of your ledger.')+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><details class="optional-entry workspace-settings"><summary>App name</summary><label class="sr-only" for="workspace-name">App name</label><input id="workspace-name" value="${esc(data.name)}" required maxlength="40"></details><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>${cloud?'Records save online. Download a backup whenever you need a copy.':'Records save in this browser. Download a copy to keep them safe.'}</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Download backup</button><button class="button secondary" data-action="import">Restore backup</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section><div class="simple-storage">${cloud?`<p>Public shared ledger · Anyone with the link can view and edit.</p>`:`<p>Local preview · Data is saved only in this browser.</p><button class="text-button" data-action="switch">${mode==='demo'?'Start my ledger':'Try sample data'}</button>`}</div>`;
+  return title('','Settings','Manage your roster, band prices, and backups.')+gangSettings(data)+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>${cloud?'Records save online. Download a backup whenever you need a copy.':'Records save in this browser. Download a copy to keep them safe.'}</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Download backup</button><button class="button secondary" data-action="import">Restore backup</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section><div class="simple-storage">${cloud?`<p>Public shared ledger · Anyone with the link can view and edit.</p>`:`<p>Local preview · Data is saved only in this browser.</p><button class="text-button" data-action="switch">${mode==='demo'?'Start my ledger':'Try sample data'}</button>`}</div>`;
 }
 function updateCalculator() {
   if (!$('#purchase-form')) return;
@@ -98,15 +101,41 @@ function updateCalculator() {
 }
 function clearDraft(){draft={};draftContact='';draftNotes='';draftPaid='';}
 function bindForms(){
+  $('#roster-search')?.addEventListener('input',e=>{memberSearch=e.target.value;$('#roster-results').innerHTML=rosterRows(data,memberSearch,memberFilter);});
+  $('#gang-settings-form')?.addEventListener('submit',async e=>{
+    e.preventDefault();
+    try {
+      const next={...data,name:$('#gang-name').value.trim(),rosterLimit:Number($('#roster-limit').value),ranks:$('#gang-ranks').value.split(/\r?\n/).map(rank=>rank.trim()).filter(Boolean)};
+      if(await commit(validateBackup(next))){render();toast('Gang settings saved.');}
+    }catch(error){$('#gang-settings-error').textContent=error.message;}
+  });
   if ($('#player-picker')) mountPlayerPicker($('#player-picker'), {options:data.contacts, value:draftContact, onChange:id=>{draftContact=id;}});
   $('#purchase-form')?.addEventListener('input',()=>{draftContact=$('#purchase-contact').value;draftNotes=$('#purchase-notes').value;draftPaid=$('#amount-paid').value;updateCalculator();});
   $('#purchase-form')?.addEventListener('submit',async e=>{e.preventDefault();try{const date=new Date().toISOString();const lines=data.bands.filter(b=>b.active&&Number(draft[b.id]?.quantity)>0).map(b=>({id:b.id,name:b.name,color:b.color,quantity:Number(draft[b.id].quantity),price:cents(draft[b.id].price)}));const amount=cents($('#amount-paid').value||0);const p=validatePurchase({id:uid(),kind:'dropoff',contactId:$('#purchase-contact').value,date,lines,payments:amount?[{id:uid(),amount,date}]:[],notes:$('#purchase-notes').value.trim()});if(await commit({...data,purchases:[p,...data.purchases]})){clearDraft();render();toast('Bands saved. Player balance updated.');}}catch(error){$('#purchase-error').textContent=error.message;}});
   $('#history-search')?.addEventListener('input',e=>{search=e.target.value;$('#history-results').innerHTML=table(filteredPurchases());});
   $('#contact-search')?.addEventListener('input',e=>{search=e.target.value;$('#contact-results').innerHTML=contactCards();});
-  $('#settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const bands=[...document.querySelectorAll('[data-setting-band]')].map(row=>({id:row.dataset.settingBand,name:row.querySelector('[name=bandname]').value.trim(),color:row.querySelector('[name=color]').value,price:cents(row.querySelector('[name=price]').value),active:row.querySelector('[name=active]').checked}));const next={...data,name:$('#workspace-name').value.trim(),bands};try{validateBackup(next);if(await commit(next)){clearDraft();render();toast('Settings saved. Your new rates are ready.');}}catch(error){$('#settings-error').textContent=error.message;}});
-  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the ${mode==='demo'?'demo':'current'} ledger with <strong>${next.contacts.length} contacts and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
+  $('#settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const bands=[...document.querySelectorAll('[data-setting-band]')].map(row=>({id:row.dataset.settingBand,name:row.querySelector('[name=bandname]').value.trim(),color:row.querySelector('[name=color]').value,price:cents(row.querySelector('[name=price]').value),active:row.querySelector('[name=active]').checked}));const next={...data,bands};try{validateBackup(next);if(await commit(next)){clearDraft();render();toast('Settings saved. Your new rates are ready.');}}catch(error){$('#settings-error').textContent=error.message;}});
+  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the ${mode==='demo'?'demo':'current'} ledger with <strong>${next.members.length} members, ${next.contacts.length} band accounts, and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
 }
 function openModal(html){$('#modal').innerHTML=`<button class="modal-close icon-button" data-action="close" aria-label="Close dialog">${icon('close')}</button>${html}`;if(!$('#modal').open)$('#modal').showModal();}
+function editMember(id) {
+  const member=data.members.find(m=>m.id===id);
+  openModal(memberForm(data,member));
+  const ranks=[...new Set([...data.ranks,...(member?[member.rank]:[])])];
+  mountPlayerPicker($('#member-rank-picker'),{options:ranks.map(rank=>({id:rank,name:rank})),value:member?.rank||data.ranks[data.ranks.length-1],noun:'rank',onChange:()=>{}});
+  $('#member-form').onsubmit=async e=>{
+    e.preventDefault();
+    try {
+      const item={id:member?.id||uid(),name:$('#member-name').value.trim(),callsign:$('#member-callsign').value.trim(),rank:$('#member-rank').value,status:document.querySelector('[name=member-status]:checked').value,joined:$('#member-joined').value,notes:$('#member-notes').value.trim()};
+      const next={...data,members:member?data.members.map(m=>m.id===member.id?item:m):[...data.members,item]};
+      if(await commit(validateBackup(next))){$('#modal').close();render();toast(member?'Member updated.':'Member added to the roster.');}
+    }catch(error){$('#member-error').textContent=error.message;}
+  };
+}
+function editGangNotes(){
+  openModal(`<h2>Gang notes</h2><form id="gang-notes-form"><label for="gang-notes">Reminders & priorities</label><textarea id="gang-notes" rows="7" maxlength="4000">${esc(data.gangNotes)}</textarea><div class="form-error" id="gang-notes-error" role="alert"></div><button class="button primary">Save notes</button></form>`);
+  $('#gang-notes-form').onsubmit=async e=>{e.preventDefault();if(await commit({...data,gangNotes:$('#gang-notes').value.trim()})){$('#modal').close();render();toast('Gang notes saved.');}};
+}
 function contactForm(id){const c=contact(id);openModal(`<h2>${c?'Edit player':'Add player'}</h2><form id="contact-form"><label for="contact-name">Name or in-game alias</label><input id="contact-name" required maxlength="60" value="${esc(c?.name||'')}" autofocus><label for="contact-notes">Notes <span class="muted">(optional)</span></label><textarea id="contact-notes" maxlength="2000" rows="3" placeholder="Anything useful to remember…">${esc(c?.notes||'')}</textarea><div class="form-error" id="contact-error" role="alert"></div><button class="button primary" type="submit">${c?'Save changes':'Add player'} ${icon('arrow',17)}</button></form>`);$('#contact-form').onsubmit=async e=>{e.preventDefault();const name=$('#contact-name').value.trim();if(!name){$('#contact-error').textContent='Enter a contact name.';return;}const item={id:c?.id||uid(),name,notes:$('#contact-notes').value.trim()};if(await commit({...data,contacts:c?data.contacts.map(old=>old.id===c.id?item:old):[...data.contacts,item]})){if(!c)draftContact=item.id;$('#modal').close();render();toast(c?'Contact updated.':'Contact added.');}};}
 function contactDetail(id) {
   const c=contact(id);if(!c)return;
@@ -126,9 +155,12 @@ document.addEventListener('pointerdown',e=>{
   const picker=$('#player-picker');
   if(picker && !picker.contains(e.target)) picker.closePicker?.();
 });
-document.addEventListener('click',e=>{
+document.addEventListener('click',async e=>{
   if(saving){e.preventDefault();return;}
   const button=e.target.closest('button,a');if(!button)return;
+  if(button.dataset.editMember){editMember(button.dataset.editMember);return;}
+  if(button.dataset.memberFilter){memberFilter=button.dataset.memberFilter;render();return;}
+  if(button.dataset.archiveMember){if(await commit({...data,members:data.members.map(m=>m.id===button.dataset.archiveMember?{...m,status:'archived'}:m)})){$('#modal').close();render();toast('Member archived. You can restore them from Archive.');}return;}
   if(button.dataset.page){e.preventDefault();go(button.dataset.page);return;}
   if(button.dataset.newDropoff){clearDraft();draftContact=button.dataset.newDropoff;$('#modal').close();go('purchase');return;}
   if(button.dataset.purchase){purchaseDetail(button.dataset.purchase);return;}
@@ -139,12 +171,14 @@ document.addEventListener('click',e=>{
   if(button.dataset.move){const row=button.closest('[data-setting-band]');if(button.dataset.move==='up'&&row.previousElementSibling)row.before(row.previousElementSibling);else if(button.dataset.move==='down'&&row.nextElementSibling)row.after(row.nextElementSibling);return;}
   switch(button.dataset.action){
     case 'close':$('#modal').close();break;
+    case 'add-member':editMember();break;
+    case 'gang-notes':editGangNotes();break;
     case 'add-contact':contactForm();break;
     case 'pay-full':draftPaid=String(updateCalculator()/100);$('#amount-paid').value=draftPaid;updateCalculator();break;
     case 'add-band':$('#band-settings').insertAdjacentHTML('beforeend',bandSetting({id:uid(),name:'New band',color:'#b9d984',price:0,active:true}));break;
     case 'reload':location.reload();break;
     case 'switch':{if(cloud)break;const nextMode=mode==='demo'?'personal':'demo';try{const raw=localStorage.getItem('bandbook-'+nextMode);const next=raw?validateBackup(JSON.parse(raw)):freshData(nextMode==='demo');localStorage.setItem('bandbook-mode',nextMode);mode=nextMode;data=next;loadError='';clearDraft();go(mode==='personal'?'settings':'overview');toast(mode==='personal'?'Your own ledger is ready. Set your band prices to get started.':'You’re exploring the demo. Your own ledger is kept separately.');}catch(error){toast('Could not switch workspace: '+error.message);}break;}
-    case 'export':{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`bandbook-${mode}-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup downloaded. Keep it somewhere safe.');break;}
+    case 'export':{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`pto-roaster-${mode}-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup downloaded. Keep it somewhere safe.');break;}
     case 'import':$('#backup-file').click();break;
   }
 });
@@ -152,10 +186,10 @@ $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const r=$('#
 window.addEventListener('storage',e=>{if(!cloud&&(e.key===key()||e.key==='bandbook-mode')){loadError='This ledger changed in another tab. Reload this page before saving to avoid overwriting those changes.';render();}});
 
 async function start() {
-  $('#app').innerHTML='<div class="startup"><h1>PTO Roaster</h1><p>Opening your ledger…</p></div>';
+  $('#app').innerHTML='<div class="startup"><h1>PTO Roaster</h1><p>Opening PTO Roaster…</p></div>';
   try {
-    const response=await fetch('/api/session',{credentials:'same-origin',cache:'no-store'});
-    if(response.status===404 && ['127.0.0.1','localhost','[::1]'].includes(location.hostname)) {render();return;}
+    const response=await fetch(apiUrl('/api/session'),{credentials:'omit',cache:'no-store'});
+    if(response.status===404 && ['127.0.0.1','localhost','[::1]'].includes(location.hostname)) {if(mode==='demo'&&!data.members.length){const sample=freshData(true);data={...data,name:data.name==='Bandbook'?'PTO Roaster':data.name,members:sample.members,rosterLimit:sample.rosterLimit,gangNotes:sample.gangNotes};}render();return;}
     if(!response.ok) throw new Error('Could not open your ledger.');
     await response.json();
     cloud=new CloudLedger();mode='cloud';loadError='';

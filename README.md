@@ -1,6 +1,12 @@
 # PTO Roaster
 
-A responsive FiveM purchase ledger with customizable bands, purchase calculations, contacts, partial payments, and JSON backups.
+A simple FiveM gang hub with a roster, customizable ranks, availability, gang notes, a band ledger, partial payments, and JSON backups.
+
+## Roster
+
+The home screen shows current, active, and inactive member counts. Add or edit members with an in-game name, optional callsign, rank, joined date, and notes. Status is maintained manually; there is no live FiveM server connection. Archive departed members to retain their details without counting them against the roster limit; restore them by editing their status in Archive.
+
+Settings controls the gang name, ordered rank list, and roster limit (0 means unlimited). The limit is informational, not a hard block. Gang notes hold shared reminders. Roster members and band-account contacts are separate; recording someone's bands does not enroll them in the gang. Existing backups load with an empty roster and retain all purchase history.
 
 ## Run locally
 
@@ -40,6 +46,10 @@ SQLite/D1 stores the validated ledger document and immutable save revisions. Upd
 The local server retains browser-only demo/personal storage for development. Production never falls back to browser storage if the cloud API is unavailable. Export local records and use **Restore backup** on the hosted site to migrate real records intentionally. Restore replaces the shared ledger after confirmation; existing SQL revisions remain available for operator recovery. Each upload is capped at 950,000 bytes to fit the document storage design; move to normalized per-entry storage before a ledger approaches that size.
 
 ## Build and publish
+
+Development remains at http://127.0.0.1:4173 with separate browser data. Keep this preview running while editing; do not publish unless requested.
+
+The public frontend target is https://blazzer10200.github.io/pto-roaster/. `npm run build:pages` creates only browser assets in `dist/pages`. The GitHub workflow **Publish PTO Roaster** runs only through manual dispatch, never automatically on push. It does not need database credentials. `api-config.js` routes this exact GitHub hostname to the existing public Sites API; the Worker allows CORS only for that GitHub origin and its own origin. SQLite and save revisions remain in the existing database, so moving the frontend does not copy or reset records. Deploy backend changes through Sites before dispatching a frontend release that depends on them.
 
 `npm run check`, `npm test`, and `npm run build` validate and build the site. The build emits a Cloudflare-compatible Worker in `dist/server/index.js`, browser files in `dist/client`, and Sites metadata/migrations in `dist/.openai`. Sites provisions D1 and applies migrations on deployment. `.openai/hosting.json` contains logical configuration only; never put credentials there.
 

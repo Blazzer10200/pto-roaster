@@ -47,3 +47,17 @@ test('oversized ledger uploads are rejected and database failure does not preten
   assert.equal((await handleApi(request('/api/ledger',body),env)).status,413);
   assert.equal((await handleApi(request(),{})).status,503);
 });
+test('GitHub Pages can preflight, read, and save the shared roster while other origins cannot write',async()=>{
+  const env=database(),origin='https://blazzer10200.github.io';
+  const preflight=await worker.fetch(new Request('https://bandbook.test/api/ledger',{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'PUT'}}),env);
+  assert.equal(preflight.status,204);assert.equal(preflight.headers.get('Access-Control-Allow-Origin'),origin);
+  const data=freshData(true),body={data,revision:0,writeId:crypto.randomUUID()};
+  const saved=await worker.fetch(request('/api/ledger',body,{Origin:origin}),env);
+  assert.equal(saved.status,200);assert.equal(saved.headers.get('Access-Control-Allow-Origin'),origin);
+  const loaded=await worker.fetch(request('/api/ledger',undefined,{Origin:origin}),env);
+  assert.deepEqual((await loaded.json()).data.members,data.members);
+  const denied=await worker.fetch(new Request('https://bandbook.test/api/ledger',{method:'OPTIONS',headers:{Origin:'https://other.test'}}),env);
+  assert.equal(denied.status,403);assert.equal(denied.headers.get('Access-Control-Allow-Origin'),null);
+  const outage=await worker.fetch(request('/api/ledger',undefined,{Origin:origin}),{});
+  assert.equal(outage.status,503);assert.equal(outage.headers.get('Access-Control-Allow-Origin'),origin);
+});

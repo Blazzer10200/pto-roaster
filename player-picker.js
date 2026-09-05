@@ -1,5 +1,5 @@
 // Searchable single-select combobox. The hidden field stores IDs, never search text.
-export function mountPlayerPicker(root, { options, value, onChange }) {
+export function mountPlayerPicker(root, { options, value, onChange, noun='player' }) {
   const input = root.querySelector('[role="combobox"]');
   const hidden = root.querySelector('input[type="hidden"]');
   const toggle = root.querySelector('[data-picker-toggle]');
@@ -15,7 +15,7 @@ export function mountPlayerPicker(root, { options, value, onChange }) {
   function syncValue() {
     input.value = selected?.name || '';
     hidden.value = selected?.id || '';
-    input.setCustomValidity(selected ? '' : 'Choose a player from the list.');
+    input.setCustomValidity(selected ? '' : `Choose a ${noun} from the list.`);
     root.classList.toggle('has-selection', Boolean(selected));
   }
   function highlight(index) {
@@ -54,7 +54,7 @@ export function mountPlayerPicker(root, { options, value, onChange }) {
       list.append(row);
     });
     message.hidden = matches.length > 0;
-    message.textContent = players.length ? 'No players found. Try another name or add a player.' : 'No players yet. Use Add player to get started.';
+    message.textContent = players.length ? `No ${noun}s found. Try another name.` : `No ${noun}s yet. Add one to get started.`;
     highlight(matches.length ? Math.max(0, matches.findIndex(p => p.id === selected?.id)) : -1);
   }
   function show(query = '') {
@@ -62,7 +62,7 @@ export function mountPlayerPicker(root, { options, value, onChange }) {
     panel.hidden = false;
     root.classList.add('is-open');
     input.setAttribute('aria-expanded', 'true');
-    toggle.setAttribute('aria-label', 'Close player list');
+    toggle.setAttribute('aria-label', `Close ${noun} list`);
     renderOptions(query);
   }
   function close() {
@@ -71,7 +71,7 @@ export function mountPlayerPicker(root, { options, value, onChange }) {
     root.classList.remove('is-open');
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
-    toggle.setAttribute('aria-label', 'Open player list');
+    toggle.setAttribute('aria-label', `Open ${noun} list`);
     syncValue();
   }
   function choose(index) {
