@@ -152,7 +152,7 @@ $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const r=$('#
 window.addEventListener('storage',e=>{if(!cloud&&(e.key===key()||e.key==='bandbook-mode')){loadError='This ledger changed in another tab. Reload this page before saving to avoid overwriting those changes.';render();}});
 
 async function start() {
-  $('#app').innerHTML='<div class="startup"><h1>Bandbook</h1><p>Opening your ledger…</p></div>';
+  $('#app').innerHTML='<div class="startup"><h1>PTO Roaster</h1><p>Opening your ledger…</p></div>';
   try {
     const response=await fetch('/api/session',{credentials:'same-origin',cache:'no-store'});
     if(response.status===404 && ['127.0.0.1','localhost','[::1]'].includes(location.hostname)) {render();return;}

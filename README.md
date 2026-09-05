@@ -1,4 +1,4 @@
-# Bandbook
+# PTO Roaster
 
 A responsive FiveM purchase ledger with customizable bands, purchase calculations, contacts, partial payments, and JSON backups.
 

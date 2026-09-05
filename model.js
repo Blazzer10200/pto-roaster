@@ -36,7 +36,7 @@ export function payContact(purchases, contactId, amount, date, paymentId) {
   return purchases.map(p => updates.get(p.id) || p);
 }
 export function validateBackup(data) {
-  if (!data || data.version !== 1 || typeof data.name !== 'string' || !data.name.trim() || data.name.length > 40 || !Array.isArray(data.bands) || !Array.isArray(data.contacts) || !Array.isArray(data.purchases)) throw new Error('This is not a valid Bandbook backup.');
+  if (!data || data.version !== 1 || typeof data.name !== 'string' || !data.name.trim() || data.name.length > 40 || !Array.isArray(data.bands) || !Array.isArray(data.contacts) || !Array.isArray(data.purchases)) throw new Error('This is not a valid PTO Roaster backup.');
   const ids = new Set();
   const identity = item => { if (!item || typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new Error('Invalid or duplicate record ID.'); ids.add(item.id); };
   for (const band of data.bands) {
@@ -55,7 +55,7 @@ export function validateBackup(data) {
 }
 export function freshData(demo = false) {
   const bands = [ ['Loose change', '#c2c9b5', 1], ['White band', '#e4e5e0', 100], ['Blue band', '#82aef5', 500], ['Purple band', '#ba98e4', 1000], ['Brown band', '#b28b6f', 5000] ].map(([name,color,price],i) => ({id:'band-'+i,name,color,price:demo ? price*100 : 0,active:true}));
-  const data = { version:1, name:'Bandbook', bands, contacts:[], purchases:[] };
+  const data = { version:1, name:'PTO Roaster', bands, contacts:[], purchases:[] };
   if (!demo) return data;
   data.contacts = [{id:'c1',name:'Marcus Reed',notes:'Usually around in the evenings.'},{id:'c2',name:'Nico Vega',notes:''},{id:'c3',name:'Alex Carter',notes:'Prefers one payment per pickup.'},{id:'c4',name:'Jordan Blake',notes:''}];
   const specs = [['c1',2,24,6000,0],['c2',3,18,18000,0],['c3',4,8,25000,1],['c4',1,65,6500,2],['c1',3,12,12000,3],['c2',2,40,10000,5]];
