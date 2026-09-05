@@ -6,7 +6,7 @@ console.log('Ready for temporary source authorization.');
 let buffer='';
 process.stdin.on('data',chunk=>{
   buffer+=chunk;
-  if(!buffer.includes('\n'))return;
+  if(!/[\r\n]/.test(buffer))return;
   process.stdin.pause();
   if(process.stdin.isTTY)process.stdin.setRawMode(false);
   try {
