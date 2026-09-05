@@ -1,0 +1,188 @@
+import {DatabaseSync} from 'node:sqlite';
+import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'node:crypto';
+import {promisify} from 'node:util';
+import {createSecurity,securitySchema} from './security-store.mjs';
+import {freshData,validateBackup} from './model.js';
+import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
+const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
+const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
+const publicUser=user=>({id:user.id,name:user.name,username:user.username,owner:!!user.owner,disabled:!!user.disabled,approval:user.approval,requestedAt:user.requested_at,reviewedAt:user.reviewed_at,roleIds:JSON.parse(user.roles),mfaVerified:!!user.mfa_verified});
+async function hashPassword(password,salt=randomBytes(16).toString('hex')){return salt+':'+Buffer.from(await scrypt(password,salt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024})).toString('hex');}
+async function verifyPassword(password,stored){const [salt,hash]=stored.split(':');const result=await hashPassword(password,salt);return timingSafeEqual(Buffer.from(result.split(':')[1],'hex'),Buffer.from(hash,'hex'));}
+const validatePassword=value=>{if(typeof value!=='string'||value.length<12||value.length>128)throw Error('Use a password between 12 and 128 characters.');};
+function accountFields(body){
+  const name=typeof body.name==='string'?body.name.trim():'';
+  const legacyEmail=typeof body.email==='string'?body.email.trim().toLowerCase():'';
+  const username=typeof body.username==='string'?body.username.trim().toLowerCase():legacyEmail.split('@')[0];
+  if(!name||name.length>60||!username||!/^[a-z0-9_.-]{3,32}$/.test(username))throw Error('Enter your in-character name and a username of 3–32 letters, numbers, dots, underscores, or hyphens.');
+  return {name,username,email:legacyEmail||crypto.randomUUID()+'@pto.invalid'};
+}
+export function createDevApi({file=':memory:',seed=freshData(true),key,now=Date.now,backupStatus=()=>({enabled:false})}={}){
+  if(!key&&file!==':memory:')throw Error('A persistent encryption key is required for this database.');
+  key=key||randomBytes(32);
+  const db=new DatabaseSync(file);
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+    CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,owner INTEGER NOT NULL DEFAULT 0,disabled INTEGER NOT NULL DEFAULT 0,roles TEXT NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_owner ON users(owner) WHERE owner=1;
+    CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY,document TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS workspace(id INTEGER PRIMARY KEY,revision INTEGER NOT NULL,document TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,user_id TEXT NOT NULL,action TEXT NOT NULL,document TEXT);`);
+  // Additive local migration preserves all existing accounts and passwords.
+  const columns=new Set(db.prepare('PRAGMA table_info(users)').all().map(column=>column.name));
+  for(const [name,type] of Object.entries({username:'TEXT',approval:"TEXT NOT NULL DEFAULT 'approved'",requested_at:'TEXT',reviewed_at:'TEXT',reviewed_by:'TEXT'}))if(!columns.has(name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  for(const row of db.prepare('SELECT id,email FROM users WHERE username IS NULL').all()){
+    let username=row.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_.-]/g,'').slice(0,24);if(username.length<3)username='user';
+    if(db.prepare('SELECT id FROM users WHERE username=?').get(username))username+='-'+row.id.slice(0,6);
+    db.prepare('UPDATE users SET username=? WHERE id=?').run(username,row.id);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS unique_username ON users(username COLLATE NOCASE)');
+  db.prepare('INSERT OR IGNORE INTO config VALUES(1,?)').run(JSON.stringify(initialAccess()));
+  const existingConfig=JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
+  if(!existingConfig.categories.some(category=>category.pages.includes('requests'))){
+    const category=existingConfig.categories.find(c=>c.pages.includes('access'))||existingConfig.categories[0];category.pages.push('requests');
+    // Existing custom roles do not gain review permission merely through inheritance.
+    for(const role of existingConfig.roles)role.pages.requests=role.id==='admin'?'manage':'none';
+    existingConfig.revision++;db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(existingConfig));
+  }
+  db.prepare('INSERT OR IGNORE INTO workspace VALUES(1,0,?)').run(JSON.stringify(validateBackup(seed)));
+  securitySchema(db);
+  const config=()=>JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
+  const rawLedger=()=>{const row=db.prepare('SELECT * FROM workspace WHERE id=1').get();return {data:validateBackup(JSON.parse(row.document)),revision:row.revision};};
+  const audit=(id,action,document=null)=>db.prepare('INSERT INTO audit(at,user_id,action,document) VALUES(?,?,?,?)').run(new Date().toISOString(),id,action,document);
+  const cookieToken=request=>(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('pto_session='))?.slice(12)||'';
+  const auth=request=>{
+    const session=db.prepare('SELECT users.*,sessions.mfa_verified FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.hash=? AND sessions.expires>? AND users.disabled=0').get(digest(cookieToken(request)),Date.now());
+    return session?publicUser(session):null;
+  };
+const sessionData=user=>{const permissions=permissionsFor(user,config());return {authenticated:true,user,security:security.state(user),roles:config().roles.filter(role=>user.roleIds.includes(role.id)).map(({id,name,color})=>({id,name,color})),permissions,categories:user.approval==='approved'?config().categories:[],pendingRequests:permits(permissions,'requests')?db.prepare("SELECT count(*) AS count FROM users WHERE approval='pending'").get().count:0,development:true};};
+  const newSession=(user,verified=false)=>{
+    db.prepare('DELETE FROM sessions WHERE expires<=?').run(Date.now());
+    const token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO sessions(hash,user_id,expires,mfa_verified) VALUES(?,?,?,?)').run(digest(token),user.id,Date.now()+12*60*60*1000,Number(verified));
+    return json(sessionData({...user,mfaVerified:verified}),200,{'Set-Cookie':`pto_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`});
+  };
+  const snapshot=()=>({format:'pto-full-backup',version:1,createdAt:new Date().toISOString(),key:key.toString('base64'),tables:Object.fromEntries(['users','config','workspace','audit','account_security','recovery_codes','security_policy'].map(table=>[table,db.prepare('SELECT * FROM '+table).all().map(row=>table==='account_security'?{...row,pending:null,pending_until:null}:row)]))});
+  const security=createSecurity({db,key,auth,publicUser,newSession,config,audit,digest,verifyPassword,hashPassword,validatePassword,json,snapshot,now,backupStatus});
+  const assertRoles=roleIds=>{if(!Array.isArray(roleIds)||new Set(roleIds).size!==roleIds.length||roleIds.some(id=>!config().roles.some(r=>r.id===id)))throw Error('Choose valid roles.');};
+  async function handle(request,{remoteAddress='local'}={}){
+    const url=new URL(request.url),route=url.pathname,method=request.method;
+    if(!['127.0.0.1','localhost','[::1]'].includes(url.hostname))return json({error:'Development API is local only.'},403);
+    if(!['GET','HEAD'].includes(method)&&(request.headers.get('origin')!==url.origin||request.headers.get('x-bandbook-request')!=='1'))return json({error:'Use the development website to make this change.'},403);
+    let body={};
+    if(!['GET','HEAD'].includes(method)){
+      if(!request.headers.get('content-type')?.startsWith('application/json'))return json({error:'Expected JSON.'},415);
+      const raw=await request.text();if(Buffer.byteLength(raw)>950000)return json({error:'Request too large.'},413);
+      try{body=JSON.parse(raw);if(!body||typeof body!=='object'||Array.isArray(body))throw Error();}catch{return json({error:'Invalid request.'},400);}
+    }
+    let user=auth(request);
+    if(route==='/api/session'&&method==='GET')return user?json(sessionData(user)):json({authenticated:false,setupRequired:!db.prepare('SELECT id FROM users LIMIT 1').get(),development:true});
+    try{
+      const securityResponse=await security.handle(request,body,user,remoteAddress);
+      if(securityResponse)return securityResponse;
+      user=auth(request);
+      if(route==='/api/auth/setup'&&method==='POST'){
+        if(db.prepare('SELECT id FROM users LIMIT 1').get())return json({error:'The Owner account is already set up.'},409);
+        security.limit('setup:'+remoteAddress,5);const fields=accountFields(body);validatePassword(body.password);const password=await security.work(()=>hashPassword(body.password));
+        db.exec('BEGIN IMMEDIATE');
+        try{
+          if(db.prepare('SELECT id FROM users LIMIT 1').get()){db.exec('ROLLBACK');return json({error:'The Owner account is already set up.'},409);}
+          const id=crypto.randomUUID();db.prepare("INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,1,?,'approved')").run(id,fields.name,fields.email,fields.username,password,'[]');audit(id,'Owner account created');db.exec('COMMIT');
+          return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)));
+        }catch(error){if(db.isTransaction)db.exec('ROLLBACK');throw error;}
+      }
+      if(route==='/api/auth/register'&&method==='POST'){
+        if(!db.prepare('SELECT id FROM users WHERE owner=1').get())return json({error:'The Owner must finish website setup first.'},409);
+        security.limit('register:'+remoteAddress,10);
+        const fields=accountFields(body);validatePassword(body.password);
+        if(db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE').get(fields.username))return json({error:'That username is already taken.'},409);
+        const password=await security.work(()=>hashPassword(body.password)),id=crypto.randomUUID();
+        db.prepare("INSERT INTO users(id,name,email,username,password,roles,approval,requested_at) VALUES(?,?,?,?,?,?,'pending',?)").run(id,fields.name,fields.email,fields.username,password,'[]',new Date().toISOString());
+        audit(id,'Account approval requested');return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)));
+      }
+      if(route==='/api/auth/login'&&method==='POST'){
+        const login=typeof (body.username??body.email)==='string'?(body.username??body.email).trim().toLowerCase():'';
+        const row=db.prepare('SELECT * FROM users WHERE username=? COLLATE NOCASE OR email=?').get(login,login);
+        const bucket='login:'+(row?.id||login);security.limit('ip:'+remoteAddress,120);security.limit(bucket);
+        const valid=typeof body.password==='string'&&body.password.length<=128&&await security.work(()=>verifyPassword(body.password,row?.password||'00000000000000000000000000000000:'+ '00'.repeat(64)));
+        const current=row&&db.prepare('SELECT * FROM users WHERE id=?').get(row.id);
+        if(!valid||!current||current.disabled||current.password!==row.password){if(current)audit(current.id,'Failed sign-in');return json({error:'Username or password is incorrect, or the account is disabled.'},401);}
+        security.clear(bucket);if(security.enabled(current.id))return security.challenge(current);
+        audit(current.id,'Signed in');return newSession(publicUser(current));
+      }
+      if(!user)return json({error:'Sign in to continue.'},401);
+      const permissions=permissionsFor(user,config());
+      if(route==='/api/auth/logout'&&method==='POST'){
+        db.prepare('DELETE FROM sessions WHERE hash=?').run(digest(cookieToken(request)));return json({ok:true},200,{'Set-Cookie':'pto_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});
+      }
+      if(route==='/api/auth/password'&&method==='POST'){
+        validatePassword(body.password);await security.reauthenticate(request,body,user);const previous=db.prepare('SELECT password FROM users WHERE id=?').get(user.id).password;
+        const password=await security.work(()=>hashPassword(body.password));if(!auth(request)||db.prepare('SELECT password FROM users WHERE id=?').get(user.id).password!==previous)return json({error:'Your session changed. Sign in again.'},401);
+        db.prepare('UPDATE users SET password=? WHERE id=?').run(password,user.id);security.revoke(user.id);audit(user.id,'Password changed');return newSession(user,security.enabled(user.id));
+      }
+      if(user.approval!=='approved')return json({error:user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.'},403);
+      if(route==='/api/requests'&&method==='GET'){
+        if(!permits(permissions,'requests'))return json({error:'Join request access required.'},403);
+        const assignableRoles=config().roles.filter(role=>{const grants=permissionsFor({roleIds:[role.id]},config());return accessPages.every(page=>accessLevels.indexOf(grants[page.id])<=accessLevels.indexOf(permissions[page.id]));});
+        return json({requests:db.prepare("SELECT * FROM users WHERE approval IN ('pending','denied') ORDER BY requested_at").all().map(publicUser),roles:assignableRoles});
+      }
+      if(route.startsWith('/api/requests/')&&method==='POST'){
+        if(!permits(permissions,'requests','manage'))return json({error:'Join request management permission required.'},403);
+        const target=db.prepare('SELECT * FROM users WHERE id=?').get(route.slice('/api/requests/'.length));
+        if(!target||target.owner)return json({error:'Request not found.'},404);
+        if(!['approved','denied'].includes(body.decision))throw Error('Choose approve or decline.');
+        if(target.approval!=='pending')return json({error:'This request was already reviewed. Refresh the queue.'},409);
+        const roleIds=body.decision==='approved'?body.roleIds:[];assertRoles(roleIds);
+        if(body.decision==='approved'){
+          if(!roleIds.length)throw Error('Assign at least one role before approving.');
+          const grants=permissionsFor({roleIds},config());
+          if(accessPages.some(page=>accessLevels.indexOf(grants[page.id])>accessLevels.indexOf(permissions[page.id])))return json({error:'You can only grant permissions within your own access.'},403);
+        }
+        db.prepare('UPDATE users SET approval=?,roles=?,reviewed_at=?,reviewed_by=? WHERE id=?').run(body.decision,JSON.stringify(roleIds),new Date().toISOString(),user.id,target.id);
+        audit(user.id,'Account request '+body.decision+': '+target.name,JSON.stringify({targetId:target.id,roleIds}));return json({ok:true});
+      }
+      if(route==='/api/access'){
+        if(!permits(permissions,'access',method==='GET'?'view':'manage'))return json({error:'Only access managers can manage roles and accounts.'},403);
+        if(method==='GET')return json({...config(),users:db.prepare('SELECT * FROM users ORDER BY owner DESC,name').all().map(publicUser)});
+        if(method==='PUT'){
+          const next=validateAccess(body);if(next.revision!==config().revision)return json({error:'Access settings changed. Reload before saving.'},409);
+          for(const row of db.prepare('SELECT roles FROM users').all())if(JSON.parse(row.roles).some(id=>!next.roles.some(r=>r.id===id)))throw Error('Reassign users before removing an assigned role.');
+          const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
+        }
+      }
+      if(route==='/api/users'&&method==='POST'){
+        if(!permits(permissions,'access','manage'))return json({error:'Access manager permission required.'},403);
+        const fields=accountFields(body);validatePassword(body.password);assertRoles(body.roleIds);
+        if(db.prepare('SELECT id FROM users WHERE email=?').get(fields.email))throw Error('An account already uses that email.');
+        const password=await security.work(()=>hashPassword(body.password)),id=crypto.randomUUID();
+        // Re-check after password hashing in case this manager was revoked.
+        const fresh=auth(request);if(!fresh||security.state(fresh).enrollmentRequired||!permits(permissionsFor(fresh,config()),'access','manage'))return json({error:'Your access changed. Sign in again.'},403);
+        assertRoles(body.roleIds);db.prepare("INSERT INTO users(id,name,email,username,password,roles,approval) VALUES(?,?,?,?,?,?,'approved')").run(id,fields.name,fields.email,fields.username,password,JSON.stringify(body.roleIds));audit(user.id,'Account created: '+id);return json({ok:true},201);
+      }
+      if(route.startsWith('/api/users/')&&method==='PUT'){
+        if(!permits(permissions,'access','manage'))return json({error:'Access manager permission required.'},403);
+        const target=db.prepare('SELECT * FROM users WHERE id=?').get(route.slice('/api/users/'.length));
+        if(!target)return json({error:'Account not found.'},404);
+        if(target.owner)throw Error('The Owner account and its access are protected.');
+        if(target.approval!=='approved')throw Error('Review this account in Join requests first.');
+        if(target.id===user.id&&body.disabled)throw Error('You cannot disable your own account.');
+        assertRoles(body.roleIds);if(typeof body.disabled!=='boolean')throw Error('Invalid account status.');
+        db.prepare('UPDATE users SET roles=?,disabled=? WHERE id=?').run(JSON.stringify(body.roleIds),Number(body.disabled),target.id);
+        db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(user.id,'Account access updated: '+target.name,JSON.stringify({targetId:target.id,previousRoles:JSON.parse(target.roles),roleIds:body.roleIds,disabled:body.disabled}));return json({ok:true});
+      }
+      if(route==='/api/ledger'){
+        const current=rawLedger();
+        if(method==='GET')return json({...current,data:visibleData(current.data,permissions)});
+        if(method==='PUT'){
+          if(!['roster','bands','ledger','settings'].some(page=>permits(permissions,page,'manage')))return json({error:'Your roles have view access only.'},403);
+          if(!Number.isSafeInteger(body.revision)||body.revision!==current.revision)return json({error:'Records changed. Reload before saving.',conflict:true},409);
+          const incoming=validateBackup(body.data);let next;
+          try{next=validateBackup(mergeAuthorizedData(current.data,incoming,permissions));}catch(error){return json({error:error.message},403);}
+          db.exec('BEGIN IMMEDIATE');try{db.prepare('UPDATE workspace SET document=?,revision=? WHERE id=1').run(JSON.stringify(next),current.revision+1);audit(user.id,'Workspace updated',JSON.stringify(current.data));db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
+          return json({data:visibleData(next,permissions),revision:current.revision+1});
+        }
+      }
+      return json({error:'Not found.'},404);
+    }catch(error){return json({error:error.message?.startsWith('UNIQUE constraint')?'That account already exists.':error.message||'Could not complete the request.'},error.status||400);}
+  }
+  return {handle,close:()=>db.close(),db,snapshot};
+}

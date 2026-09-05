@@ -1,0 +1,42 @@
+# PTO security
+
+Both the loopback development server and hosted Worker enforce application login, approval, roles and two-factor policies. GitHub Pages serves only allowlisted public assets; private accounts and records remain in the backend.
+
+## Owner setup
+
+1. Open **Review security** or the account menu's **Account settings**.
+2. Choose **Set up two-factor**, confirm your current password, scan the locally generated QR code in an authenticator, and confirm a fresh six-digit code.
+3. Save the recovery codes in a private password manager or another secure location. They are shown once.
+4. Open **Admin protection**, enter your password and a fresh authenticator code, and choose **Require two-factor for admins**. The Owner and roles with Manage on Roles & access must then enroll before opening workspace data. The requirement cannot be disabled through the UI.
+
+Two-factor is not enabled automatically on a real user's behalf. Existing local accounts keep their passwords and access until the Owner enables the admin requirement. Non-admin accounts can enroll voluntarily. A stolen administrator session is still sensitive: only grant global role administration to trusted people.
+
+## Authentication and recovery
+
+- Passwords use salted scrypt. Login attempts are reserved in SQLite before password work; account IDs unify username/email aliases, a separate bucket uses the socket's client address, and expensive password operations are bounded. Request headers cannot supply a trusted client address. Limits survive server restarts and expire after their windows.
+- RFC 6238 TOTP uses 30-second periods and a one-step clock tolerance. Accepted codes cannot be replayed. QR generation occurs on the server without sending secrets to a third party. Authenticator secrets are AES-256-GCM encrypted with the private local key.
+- Password-only login creates a five-minute challenge when MFA is enabled. It does not create an authenticated session. Password changes, enrollment, account recovery, and explicit session revocation invalidate other sessions/challenges as applicable.
+- **Trouble signing in?** accepts a username, recovery code, and replacement password. Recovery codes contain 96 bits of randomness and only account-bound hashes are stored. A successful recovery expires the entire code set, removes the old authenticator, and signs out all devices. Approval status and roles do not change. Admins must re-enroll when the admin policy is enabled.
+- Regenerating recovery codes, changing passwords, requiring admin MFA, signing out other sessions, and exporting full backups require password confirmation and a fresh authenticator code when enrolled. There is no email reset service, universal reset password, or admin-readable password.
+- Sessions use random tokens stored as hashes with HttpOnly/SameSite cookies and a 12-hour lifetime. Development is HTTP on loopback only. The hosted Worker uses HTTPS and Secure cookies. GitHub Pages uses a token held only in JavaScript memory and sent through Authorization; a page reload requires sign-in. Tokens are never stored in URLs/localStorage/sessionStorage. The local development server must not be exposed through a public tunnel.
+
+## Activity and backups
+
+**Roles & access → Activity** is limited to account administrators. It displays actor, time, and account/workspace events, with pagination. Stored workspace snapshots and security details are not returned in this activity feed. This local database is not a tamper-proof external audit service.
+
+The server creates at most one encrypted daily snapshot under `.local/backups/` at startup or an hourly check while running. The Backups tab reports the snapshot time or an error. No automatic deletion/retention cleanup is configured. These snapshots require the original `.local/security.key`; keep that key private and backed up separately. Snapshots on the same drive do not protect against losing the computer.
+
+**Roles & access → Backups** lets the Owner download a complete encrypted backup protected by a separate 15–128-character passphrase. It contains accounts, password hashes, encrypted MFA configuration and its key, recovery-code hashes, roles, security policy, workspace, and activity. Sessions, pending MFA enrollment secrets, challenges, and rate-limit buckets are excluded. A ledger JSON download under Settings is **not** a full security backup.
+
+`restore-backup.mjs` validates and restores only into a **new directory**, never the live workspace. For a downloaded `.ptobak`, the operator supplies `PTO_BACKUP_PASSWORD` privately in the environment and runs `node restore-backup.mjs BACKUP_FILE NEW_DIRECTORY`. For a local daily snapshot, supply `PTO_BACKUP_KEY_FILE` pointing to the original key instead. Clear temporary environment secrets afterward. The restored directory contains a database/key pair, without signed-in sessions. Verify the copy before an explicitly authorized switchover. A forgotten backup passphrase cannot be recovered.
+
+## Hosted operation
+
+- The Worker stores account/workspace state in D1 using an atomic revision comparison. Competing mutations rerun against current permissions before committing; state, audit records and the daily encrypted snapshot commit together. Per-account and Cloudflare client-IP limits are shared in D1. The document is capped at 1.4 MB; normalize storage before approaching this limit.
+- `PTO_SECURITY_KEY` is a private runtime secret. The one-time `/api/operator/migrate` route additionally requires `PTO_MIGRATION_TOKEN` and rejects all imports after initialization. The public cannot claim the Owner account. Remove the migration secret after the verified import.
+- Legacy hosted ledger tables remain preserved for operator recovery and are no longer exposed through the API. Hosted daily snapshots are encrypted, chunked in D1, and created on the first state change each UTC day; they are not an independent off-provider backup. Download a passphrase-protected full backup to a separate location.
+- GitHub Pages CORS is restricted to the configured GitHub origin. Public pages have a CSP meta policy; hosted responses add frame protection and no-store API headers. No ChatGPT login is involved.
+- Complete Owner MFA/recovery setup, require admin MFA, and configure off-device encrypted backups plus a tested restoration procedure.
+- Review signup abuse controls against real traffic and verify recovery, session revocation, audit access, and security headers on the final domain. Run the security regression tests and dependency audit.
+
+Implementation references: [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238), [OWASP MFA guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html). The TOTP tests include the RFC's SHA-1 test vectors.

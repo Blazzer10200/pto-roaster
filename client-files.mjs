@@ -1,1 +1,1 @@
-export const clientFiles=['index.html','styles.css','roster.css','app.js','model.js','roster.js','player-picker.js','cloud.js','api-config.js','pto.gif','pto-still.png'];
+export const clientFiles=['index.html','security.css','security-ui.js','polish.css','ui-shell.js','styles.css','roster.css','auth.css','app.js','model.js','roster.js','auth-ui.js','access-model.js','player-picker.js','cloud.js','api-config.js','pto.gif','pto-still.png'];

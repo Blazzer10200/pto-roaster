@@ -1,63 +1,102 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
-import worker, { handleApi } from './worker.js';
-import { freshData } from './model.js';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync,readdirSync} from 'node:fs';
+import {randomBytes,scryptSync} from 'node:crypto';
+import worker from './worker.js';
+import {createDevApi} from './dev-api.mjs';
+import {totp,decryptBackup,unseal} from './security-crypto.mjs';
+import {restoreSnapshot} from './backup-restore.mjs';
 
-function database() {
-  const sql=new DatabaseSync(':memory:');
-  sql.exec(readFileSync(new URL('./drizzle/0000_tired_moondragon.sql',import.meta.url),'utf8'));
-  const db={prepare(text){let args=[];return {bind(...values){args=values;return this;},async first(){return sql.prepare(text).get(...args)||null;},async run(){const result=sql.prepare(text).run(...args);return {meta:{changes:Number(result.changes)}};}};},async batch(statements){sql.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());sql.exec('COMMIT');return result;}catch(e){sql.exec('ROLLBACK');throw e;}}};
-  return {DB:db,sql};
+const origin='https://blazzer10200.github.io',apiOrigin='https://bandbook.test';
+const password='Testing-only-Password-32768';
+const salt='01'.repeat(16),hash=salt+':'+scryptSync(password,salt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024}).toString('hex');
+function database(){
+ const sql=new DatabaseSync(':memory:');
+ for(const f of readdirSync(new URL('./drizzle/',import.meta.url)).filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync(new URL('./drizzle/'+f,import.meta.url),'utf8'));
+ const DB={prepare(text){let args=[];return {bind(...values){args=values;return this;},async first(){return sql.prepare(text).get(...args)||null;},async all(){return {results:sql.prepare(text).all(...args)};},execute(){return {meta:{changes:Number(sql.prepare(text).run(...args).changes)}};},async run(){return this.execute();}};},async batch(statements){sql.exec('BEGIN');try{const results=statements.map(s=>s.execute());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ return {DB,sql,PTO_SECURITY_KEY:randomBytes(32).toString('base64'),PTO_MIGRATION_TOKEN:randomBytes(32).toString('hex')};
 }
-function request(path='/api/ledger',body,headers={}) {
-  return new Request('https://bandbook.test'+path,{method:body?'PUT':'GET',headers:{...(body?{'Content-Type':'application/json','Origin':'https://bandbook.test','X-Bandbook-Request':'1'}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});
+function request(path,body,{token='',method=body?'POST':'GET',source=origin,headers={}}={}){
+ return new Request(apiOrigin+path,{method,headers:{Origin:source,'CF-Connecting-IP':'192.0.2.1',...(body?{'Content-Type':'application/json','X-Bandbook-Request':'1'}:{}),...(token?{Authorization:'Bearer '+token}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});
 }
-test('anonymous visitors open the app and read the ledger without a login redirect',async()=>{
-  const env=database();
-  assert.equal((await handleApi(new Request('https://bandbook.test/api/ledger'),env)).status,200);
-  const result=await worker.fetch(new Request('https://bandbook.test/'),{...env,ASSETS:{fetch:async()=>new Response('<h1>Bandbook</h1>')}});
-  assert.equal(result.status,200);assert.equal(result.headers.get('location'),null);
-  assert.match(await result.text(),/Bandbook/);
+async function call(env,path,body,options){return worker.fetch(request(path,body,options),env);}
+async function initialized(t){
+ const env=database();t.after(()=>env.sql.close());
+ const local=createDevApi({key:Buffer.from(env.PTO_SECURITY_KEY,'base64')});
+ for(const [id,owner,roles] of [['owner',1,[]],['leader',0,['admin']]])local.db.prepare("INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,?,?,'approved')").run(id,id,id+'@pto.invalid',id,hash,owner,JSON.stringify(roles));
+ const snapshot=local.snapshot();local.close();
+ const migrated=await call(env,'/api/operator/migrate',snapshot,{source:apiOrigin,headers:{'X-PTO-Migration':env.PTO_MIGRATION_TOKEN}});assert.equal(migrated.status,200,await migrated.text());
+ env.original=snapshot;return env;
+}
+async function login(env,username='leader'){
+ const res=await call(env,'/api/auth/login',{username,password});assert.equal(res.status,200,await res.clone().text());return {token:res.headers.get('X-PTO-Session'),data:await res.json()};
+}
+
+test('public page requires application login; migration is authenticated and one-time',async t=>{
+ const env=await initialized(t);
+ assert.equal((await call(env,'/api/ledger')).status,401);
+ assert.deepEqual(await (await call(env,'/api/session')).json(),{authenticated:false,setupRequired:false,development:false});
+ assert.equal((await call(env,'/api/auth/setup',{})).status,409);
+ assert.equal((await call(env,'/api/operator/migrate',env.original,{source:apiOrigin,headers:{'X-PTO-Migration':env.PTO_MIGRATION_TOKEN}})).status,409);
+ assert.equal((await call(env,'/api/operator/migrate',env.original)).status,404);
+ const res=await worker.fetch(new Request(apiOrigin+'/'),{ASSETS:{fetch:async()=>new Response('<h1>PTO</h1>')}});
+ assert.equal(res.status,200);assert.equal(res.headers.get('X-Frame-Options'),'DENY');
 });
-test('new hosted ledger is empty and public session needs no identity',async()=>{
-  const env=database();const initial=await (await handleApi(request(),env)).json();
-  assert.equal(initial.revision,0);assert.equal(initial.data.contacts.length,0);assert.ok(initial.data.bands.every(b=>b.price===0));
-  assert.deepEqual(await (await handleApi(request('/api/session'),env)).json(),{access:'public'});
+test('migrated leader signs in from Pages; unauthorized origins cannot read or preflight',async t=>{
+ const env=await initialized(t),{token,data}=await login(env);
+ assert.equal(data.user.owner,false);assert.equal(data.permissions.access,'manage');
+ const loaded=await call(env,'/api/ledger',undefined,{token});assert.equal(loaded.status,200);
+ assert.equal(loaded.headers.get('Access-Control-Allow-Origin'),origin);
+ const denied=await call(env,'/api/ledger',undefined,{token,source:'https://evil.test'});assert.equal(denied.status,403);
+ const preflight=await call(env,'/api/ledger',undefined,{method:'OPTIONS'});assert.equal(preflight.status,204);assert.match(preflight.headers.get('Access-Control-Allow-Headers'),/Authorization/);
+ assert.equal((await call(env,'/api/ledger',undefined,{method:'OPTIONS',source:'https://evil.test'})).status,403);
+ const logout=await call(env,'/api/auth/logout',{}, {token});assert.equal(logout.status,200);
+ assert.equal((await call(env,'/api/ledger',undefined,{token})).status,401);
 });
-test('saves persist in SQLite with an audit snapshot and stale writes cannot overwrite them',async()=>{
-  const env=database();const data=freshData();data.name='My ledger';
-  const body={data,revision:0,writeId:crypto.randomUUID()};
-  const saved=await handleApi(request('/api/ledger',body),env);assert.equal(saved.status,200);
-  const again=await handleApi(request('/api/ledger',body),env);assert.equal(again.status,200);
-  const stale=await handleApi(request('/api/ledger',{...body,writeId:crypto.randomUUID(),data:{...data,name:'Stale'}}),env);assert.equal(stale.status,409);
-  const current=await (await handleApi(request(),env)).json();assert.equal(current.data.name,'My ledger');assert.equal(current.revision,1);
-  assert.equal(env.sql.prepare('SELECT count(*) AS count FROM ledger_revisions').get().count,1);
+test('registration waits for approval; member reads are filtered and cannot save',async t=>{
+ const env=await initialized(t),leader=await login(env);
+ const registered=await call(env,'/api/auth/register',{username:'new.member',name:'New Member',password});assert.equal(registered.status,200);
+ const member={token:registered.headers.get('X-PTO-Session')},u=(await registered.json()).user;
+ assert.equal(u.approval,'pending');assert.equal((await call(env,'/api/ledger',undefined,member)).status,403);
+ assert.equal((await call(env,'/api/requests/'+u.id,{decision:'approved',roleIds:['member']},leader)).status,200);
+ const loaded=await (await call(env,'/api/ledger',undefined,member)).json();assert.equal(loaded.data.purchases.length,0);assert.ok(loaded.data.members.length);
+ assert.equal((await call(env,'/api/ledger',{data:loaded.data,revision:loaded.revision},{...member,method:'PUT'})).status,403);
+ assert.equal((await call(env,'/api/access',undefined,member)).status,403);
+ assert.equal((await call(env,'/api/users/owner',{disabled:true,roleIds:[]},{...leader,method:'PUT'})).status,400);
 });
-test('cross-origin writes and corrupt backups are rejected without altering the ledger',async()=>{
-  const env=database(),body={data:freshData(),revision:0,writeId:crypto.randomUUID()};
-  assert.equal((await handleApi(request('/api/ledger',body,{Origin:'https://other.test'}),env)).status,403);
-  assert.equal((await handleApi(request('/api/ledger',{...body,data:{}}),env)).status,400);
-  assert.equal((await handleApi(request('/api/ledger',{...body,revision:-1}),env)).status,400);
-  assert.equal(env.sql.prepare('SELECT count(*) AS count FROM ledger_revisions').get().count,0);
+test('simultaneous edits preserve one winner and encrypted backups restore accounts',async t=>{
+ const env=await initialized(t),leader=await login(env);
+ const current=await (await call(env,'/api/ledger',undefined,leader)).json();
+ const edits=await Promise.all(['First','Second'].map(name=>call(env,'/api/ledger',{revision:current.revision,data:{...current.data,name}},{...leader,method:'PUT'})));
+ assert.deepEqual(edits.map(r=>r.status).sort(),[200,409]);
+ const final=await (await call(env,'/api/ledger',undefined,leader)).json();assert.equal(final.revision,current.revision+1);
+ const parts=env.sql.prepare('SELECT document FROM pto_backups ORDER BY day,part').all();assert.ok(parts.length);
+ const snapshot=JSON.parse(unseal(JSON.parse(parts.map(r=>r.document).join('')),Buffer.from(env.PTO_SECURITY_KEY,'base64')).toString());
+ const restored=restoreSnapshot(snapshot);assert.equal(restored.db.prepare('SELECT count(*) AS n FROM users').get().n,2);restored.close();
 });
-test('oversized ledger uploads are rejected and database failure does not pretend to save',async()=>{
-  const env=database(),body={data:freshData(),revision:0,writeId:crypto.randomUUID(),padding:'x'.repeat(950001)};
-  assert.equal((await handleApi(request('/api/ledger',body),env)).status,413);
-  assert.equal((await handleApi(request(),{})).status,503);
+test('authenticator challenges, recovery, admin gate and session revocation work on hosted API',async t=>{
+ const env=await initialized(t),owner=await login(env,'owner'),leader=await login(env);
+ const setup=await call(env,'/api/security/setup',{currentPassword:password},owner);assert.equal(setup.status,200,await setup.clone().text());
+ const {secret,qr}=await setup.json();assert.match(qr,/^data:image\/svg\+xml;base64,/);
+ const confirmed=await call(env,'/api/security/confirm',{code:totp(secret)},owner);assert.equal(confirmed.status,200);
+ const codes=(await confirmed.json()).recoveryCodes;owner.token=confirmed.headers.get('X-PTO-Session');
+ assert.equal((await call(env,'/api/ledger',undefined,leader)).status,200);
+ // Advance last accepted step for subsequent independent reauthentication in this fixture.
+ const state=JSON.parse(env.sql.prepare('SELECT document FROM pto_state').get().document);state.security[0].last_step=-1;env.sql.prepare('UPDATE pto_state SET document=?').run(JSON.stringify(state));
+ const policy=await call(env,'/api/security/policy',{currentPassword:password,code:totp(secret),requireAdminMfa:true},owner);assert.equal(policy.status,200);
+ assert.equal((await call(env,'/api/ledger',undefined,leader)).status,403);
+ const challenged=await login(env,'owner');assert.equal(challenged.data.mfaRequired,true);assert.equal(challenged.token,null);
+ assert.equal((await call(env,'/api/auth/mfa',{challenge:challenged.data.challenge,code:totp(secret)})).status,401);
+ const recovered=await call(env,'/api/auth/recover',{username:'owner',recoveryCode:codes[0],password:'New-testing-password-999'});assert.equal(recovered.status,200);
+ assert.equal((await call(env,'/api/ledger',undefined,owner)).status,401);
+ assert.equal((await call(env,'/api/auth/recover',{username:'owner',recoveryCode:codes[0],password:'New-testing-password-999'})).status,401);
 });
-test('GitHub Pages can preflight, read, and save the shared roster while other origins cannot write',async()=>{
-  const env=database(),origin='https://blazzer10200.github.io';
-  const preflight=await worker.fetch(new Request('https://bandbook.test/api/ledger',{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'PUT'}}),env);
-  assert.equal(preflight.status,204);assert.equal(preflight.headers.get('Access-Control-Allow-Origin'),origin);
-  const data=freshData(true),body={data,revision:0,writeId:crypto.randomUUID()};
-  const saved=await worker.fetch(request('/api/ledger',body,{Origin:origin}),env);
-  assert.equal(saved.status,200);assert.equal(saved.headers.get('Access-Control-Allow-Origin'),origin);
-  const loaded=await worker.fetch(request('/api/ledger',undefined,{Origin:origin}),env);
-  assert.deepEqual((await loaded.json()).data.members,data.members);
-  const denied=await worker.fetch(new Request('https://bandbook.test/api/ledger',{method:'OPTIONS',headers:{Origin:'https://other.test'}}),env);
-  assert.equal(denied.status,403);assert.equal(denied.headers.get('Access-Control-Allow-Origin'),null);
-  const outage=await worker.fetch(request('/api/ledger',undefined,{Origin:origin}),{});
-  assert.equal(outage.status,503);assert.equal(outage.headers.get('Access-Control-Allow-Origin'),origin);
+test('hosted rate limits survive API instances, uploads are bounded and missing bindings fail closed',async t=>{
+ const env=await initialized(t);
+ for(let i=0;i<8;i++)assert.equal((await call(env,'/api/auth/login',{username:'leader',password:'incorrect'})).status,401);
+ assert.equal((await call(env,'/api/auth/login',{username:'leader',password})).status,429);
+ assert.equal((await call(env,'/api/auth/login',{username:'leader@pto.invalid',password})).status,429);
+ assert.equal((await call(env,'/api/ledger',{padding:'x'.repeat(950001)},{method:'PUT'})).status,413);
+ assert.equal((await call({},'/api/ledger')).status,503);
 });
