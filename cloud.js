@@ -2,7 +2,7 @@ export class CloudLedger {
   revision = 0;
   async request(path, options={}) {
     const response=await fetch(path,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000),...options});
-    if(response.status===401) throw new Error('Your session expired. Reload to sign in again.');
+    if(response.status===401) throw new Error('The ledger is unavailable. Reload to try again.');
     let payload;try{payload=await response.json();}catch{throw new Error('Could not connect to the ledger. Reload to try again.');}
     if(!response.ok) { const error=new Error(payload.error||'Could not save the ledger.');error.conflict=response.status===409;throw error; }
     return payload;

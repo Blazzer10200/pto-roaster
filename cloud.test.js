@@ -14,10 +14,10 @@ test('cloud client submits the loaded revision and advances it only after a conf
   const ledger=new CloudLedger();assert.deepEqual(await ledger.load(),{name:'Old'});
   assert.deepEqual(await ledger.save({name:'New'}),{name:'New'});assert.equal(ledger.revision,4);
 });
-test('conflicts and expired sessions remain errors, with no revision advance',async t=>{
+test('conflicts and unavailable access remain errors, with no revision advance',async t=>{
   t.mock.method(globalThis,'fetch',async()=>Response.json({error:'Changed on another device.'},{status:409}));
   const ledger=new CloudLedger();ledger.revision=2;
   await assert.rejects(ledger.save({}),error=>error.conflict===true);assert.equal(ledger.revision,2);
   globalThis.fetch=async()=>Response.json({},{status:401});
-  await assert.rejects(ledger.load(),/session expired/);
+  await assert.rejects(ledger.load(),/ledger is unavailable/);
 });

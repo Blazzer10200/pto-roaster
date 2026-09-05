@@ -31,11 +31,11 @@ Features:
 
 All new records use the same band-entry flow, so an unpaid delivery is not counted twice when it is paid. Existing purchase and drop-off records and backups remain compatible. Quantities are individual band/item counts; no unstated stack-size conversion is assumed.
 
-## Storage and login
+## Public access and storage
 
-The hosted site uses Sites-managed ChatGPT sign-in and a private access allowlist. All allowed visitors are trusted ledger managers and share the same ledger. Players in the ledger are records, not login accounts. Do not make this site public or invite players unless they should be able to see and manage the entire ledger.
+The hosted site is intentionally public and opens without a ChatGPT account or any login. Everyone with the URL can read and manage the same shared ledger. Players in the ledger are records, not login accounts. Settings shows this shared-access scope. Anonymous changes are recorded as `public`, not attributed to a person.
 
-The Worker rejects requests without dispatcher-provided identity. SQLite/D1 stores the validated ledger document and immutable save revisions. Updates use an atomic revision check, so stale devices cannot overwrite newer data. A failed or uncertain save blocks additional saves until reload. Use **Reload latest** when moving between devices; this version does not live-stream other devices' edits. The database schema is managed by generated Drizzle migrations.
+SQLite/D1 stores the validated ledger document and immutable save revisions. Updates use an atomic revision check, so stale devices cannot overwrite newer data. Same-origin and JSON validation checks still apply to writes. A failed or uncertain save blocks additional saves until reload. Use **Reload latest** when moving between devices; this version does not live-stream other devices' edits. The database schema is managed by generated Drizzle migrations.
 
 The local server retains browser-only demo/personal storage for development. Production never falls back to browser storage if the cloud API is unavailable. Export local records and use **Restore backup** on the hosted site to migrate real records intentionally. Restore replaces the shared ledger after confirmation; existing SQL revisions remain available for operator recovery. Each upload is capped at 950,000 bytes to fit the document storage design; move to normalized per-entry storage before a ledger approaches that size.
 
@@ -43,6 +43,6 @@ The local server retains browser-only demo/personal storage for development. Pro
 
 `npm run check`, `npm test`, and `npm run build` validate and build the site. The build emits a Cloudflare-compatible Worker in `dist/server/index.js`, browser files in `dist/client`, and Sites metadata/migrations in `dist/.openai`. Sites provisions D1 and applies migrations on deployment. `.openai/hosting.json` contains logical configuration only; never put credentials there.
 
-The source repository and production site are managed by the Sites connector. Preserve the current owner-only access policy until a specific manager is authorized. The Worker must remain behind the Sites dispatcher, which verifies identity and strips spoofed identity headers. It must not be exposed directly on an unprotected origin.
+The source repository and production site are managed by the Sites connector. The site audience is public, as requested by its owner. The application does not require or use ChatGPT identity headers.
 
 Google Fonts supplies DM Sans and Manrope when available; system sans-serif is the offline fallback.

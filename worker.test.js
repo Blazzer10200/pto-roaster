@@ -12,19 +12,19 @@ function database() {
   return {DB:db,sql};
 }
 function request(path='/api/ledger',body,headers={}) {
-  return new Request('https://bandbook.test'+path,{method:body?'PUT':'GET',headers:{'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.test',...(body?{'Content-Type':'application/json','Origin':'https://bandbook.test','X-Bandbook-Request':'1'}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});
+  return new Request('https://bandbook.test'+path,{method:body?'PUT':'GET',headers:{...(body?{'Content-Type':'application/json','Origin':'https://bandbook.test','X-Bandbook-Request':'1'}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});
 }
-test('anonymous visitors cannot read or write the API',async()=>{
+test('anonymous visitors open the app and read the ledger without a login redirect',async()=>{
   const env=database();
-  assert.equal((await handleApi(new Request('https://bandbook.test/api/ledger'),env)).status,401);
-  const result=await worker.fetch(new Request('https://bandbook.test/'),env);
-  assert.equal(result.status,302);assert.match(result.headers.get('location'),/signin-with-chatgpt/);
-  assert.equal(env.sql.prepare('SELECT count(*) AS count FROM ledger').get().count,0);
+  assert.equal((await handleApi(new Request('https://bandbook.test/api/ledger'),env)).status,200);
+  const result=await worker.fetch(new Request('https://bandbook.test/'),{...env,ASSETS:{fetch:async()=>new Response('<h1>Bandbook</h1>')}});
+  assert.equal(result.status,200);assert.equal(result.headers.get('location'),null);
+  assert.match(await result.text(),/Bandbook/);
 });
-test('new hosted ledger is empty and session exposes only the current email',async()=>{
+test('new hosted ledger is empty and public session needs no identity',async()=>{
   const env=database();const initial=await (await handleApi(request(),env)).json();
   assert.equal(initial.revision,0);assert.equal(initial.data.contacts.length,0);assert.ok(initial.data.bands.every(b=>b.price===0));
-  assert.deepEqual(await (await handleApi(request('/api/session'),env)).json(),{email:'owner@example.test'});
+  assert.deepEqual(await (await handleApi(request('/api/session'),env)).json(),{access:'public'});
 });
 test('saves persist in SQLite with an audit snapshot and stale writes cannot overwrite them',async()=>{
   const env=database();const data=freshData();data.name='My ledger';

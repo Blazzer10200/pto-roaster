@@ -18,14 +18,11 @@ async function readLedger(db, userId) {
 }
 
 export async function handleApi(request, env) {
-  // The Sites dispatcher authenticates visitors and enforces the Site allowlist.
-  // These headers are trusted only behind that dispatcher; never expose this
-  // Worker on an unprotected route that accepts user-supplied identity headers.
-  const userId=request.headers.get('oai-authenticated-user-id');
-  const email=request.headers.get('oai-authenticated-user-email');
-  if(!userId || !email) return json({error:'Sign in to use the ledger.'},401);
+  // This is an intentionally public, shared ledger with no account requirement.
+  // Anonymous saves are not attributed to an authenticated person.
+  const userId='public';
   const url=new URL(request.url);
-  if(url.pathname==='/api/session' && request.method==='GET') return json({email});
+  if(url.pathname==='/api/session' && request.method==='GET') return json({access:'public'});
   if(url.pathname!=='/api/ledger') return json({error:'Not found.'},404);
   if(!env.DB) return json({error:'The database is not connected yet.'},503);
   if(request.method==='GET') return json(snapshot(await readLedger(env.DB,userId)));
@@ -64,9 +61,6 @@ export default {
     const url=new URL(request.url);
     try {
       if(url.pathname.startsWith('/api/')) return await handleApi(request,env);
-      if(!request.headers.get('oai-authenticated-user-id') || !request.headers.get('oai-authenticated-user-email')) {
-        return Response.redirect(url.origin+'/signin-with-chatgpt?return_to=%2F',302);
-      }
       const response=await env.ASSETS.fetch(request);
       const secured=new Response(response.body,response);
       secured.headers.set('X-Content-Type-Options','nosniff');
