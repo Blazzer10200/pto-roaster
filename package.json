@@ -1,0 +1,19 @@
+{
+  "name": "bandbook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "test": "node --test",
+    "check": "node --check app.js && node --check player-picker.js && node --check cloud.js && node --check worker.js",
+    "build": "node build.mjs",
+    "db:generate": "drizzle-kit generate"
+  },
+  "devDependencies": {
+    "@openai/sites-vite-plugin": "^0.2.0",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "vite": "^8.2.2"
+  }
+}
