@@ -1,3 +1,4 @@
+import {auditDetails} from './audit-details.js';
 import {randomBytes,createHash} from 'node:crypto';
 import {newTotpSecret,matchingStep,seal,unseal,encryptBackup} from './security-crypto.mjs';
 import {permits,permissionsFor} from './access-model.js';
@@ -98,8 +99,8 @@ export function createSecurity({db,key,auth,publicUser,newSession,config,audit,d
     if(route==='/api/audit'&&method==='GET'){
       if(!permits(permissionsFor(user,config()),'access','manage'))throw failure('Account administration permission required.',403);
       const before=Number(searchParams.get('before'))||Number.MAX_SAFE_INTEGER;
-      const events=db.prepare('SELECT audit.id,audit.at,audit.action,users.name AS actor FROM audit LEFT JOIN users ON audit.user_id=users.id WHERE audit.id<? ORDER BY audit.id DESC LIMIT 51').all(before);
-      const more=events.length>50;return json({events:events.slice(0,50),next:more?events[49].id:null});
+      const events=db.prepare('SELECT audit.id,audit.at,audit.action,audit.document,users.name AS actor FROM audit LEFT JOIN users ON audit.user_id=users.id WHERE audit.id<? ORDER BY audit.id DESC LIMIT 51').all(before);
+      const more=events.length>50;return json({events:events.slice(0,50).map(e=>({id:e.id,at:e.at,action:e.action,actor:auditDetails(e.document).actorName||e.actor||'Deleted account',changes:auditDetails(e.document).changes||[]})),next:more?events[49].id:null});
     }
     if(route==='/api/security/backup'&&method==='POST'){
       if(!user.owner)throw failure('Only the Owner can export a full security backup.',403);

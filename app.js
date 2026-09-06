@@ -1,4 +1,7 @@
 import {readIdentity,pickerMarkup,mountProfilePicker} from './profile-ui.js';
+import {mountHub} from './hub-ui.js';
+import {clearAllDrafts} from './draft-store.js';
+import {mountReleaseNotice} from './release-ui.js';
 import {mountFinance} from './finance-ui.js';
 import {financeDay} from './finance-model.js';
 import {authRequest,loginScreen,approvalScreen,mountAccess,mountRequests,accountDialog} from './auth-ui.js';
@@ -16,13 +19,13 @@ const money = value => '$' + (value / 100).toLocaleString('en-US', {maximumFract
 const uid = () => crypto.randomUUID();
 const icon = (name, size=20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${({grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',plus:'<path d="M12 5v14M5 12h14"/>',people:'<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 4v2"/>',history:'<path d="M3 10a9 9 0 1 1 1 7M3 4v6h6M12 7v5l3 2"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--panel)"/><circle cx="15" cy="17" r="3" fill="var(--panel)"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',down:'<path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/>',wallet:'<path d="M20 7H5a2 2 0 0 1 0-4h13v4M3 5v14a2 2 0 0 0 2 2h15V7M20 12h-5v5h5"/>',box:'<path d="m12 3 9 5v9l-9 5-9-5V8l9-5ZM3 8l9 5 9-5M12 13v9M7.5 5.5l9 5"/>',check:'<path d="m5 12 4 4L19 6"/>',search:'<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',close:'<path d="m6 6 12 12M18 6 6 18"/>',chevron:'<path d="m9 5 7 7-7 7"/>',coin:'<circle cx="12" cy="12" r="9"/><path d="M15 8H10a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H9M12 6v12"/>',moon:'<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>'})[name] || ''}</svg>`;
 let data=freshData(), loadError = '', cloud=null, saving=false, authSession=null;
-let pageDirty=false,syncBusy=false;
+let pageDirty=false,syncBusy=false,pendingAccessTab='';
 const hasOpenModal=()=>!!$('#modal')?.open;
-const canApplyRemote=()=>!pageDirty&&!saving&&!hasOpenModal()&&!$('#finance-panel')?.busy;
+const canApplyRemote=()=>!pageDirty&&!saving&&!hasOpenModal()&&!$('#finance-panel')?.busy&&!$('#hub-panel')?.busy;
 function syncMessage(message=''){const note=$('#live-sync-note');if(note){note.hidden=!message;note.textContent=message;}}
-document.addEventListener('input',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel'))pageDirty=true;});
-document.addEventListener('change',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel'))pageDirty=true;});
-const permissionPage=id=>({overview:'bands',history:'ledger',contacts:'ledger'}[id]||id);
+document.addEventListener('input',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel,#finance-deposit-form'))pageDirty=true;});
+document.addEventListener('change',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel,#finance-deposit-form'))pageDirty=true;});
+const permissionPage=id=>['home','notifications'].includes(id)?Object.keys(authSession?.permissions||{}).find(k=>permits(authSession.permissions,k))||'roster':({overview:'bands',history:'ledger',contacts:'ledger',events:'roster'}[id]||id);
 const can=(id,level='view')=>permits(authSession?.permissions,permissionPage(id),level);
 const storageLabel=()=>authSession?.development?'Saved locally':'Saved online';
 let memberFilter='current', memberSearch='';
@@ -59,18 +62,25 @@ function toast(message) { $('#toast').textContent=message;$('#toast').classList.
 document.addEventListener('click',dismissAccountMenu);
 document.addEventListener('keydown',dismissAccountMenu);
 document.addEventListener('focusin',dismissAccountMenu);
-function go(next) {const target=next==='purchase'?'overview':next;if(!can(target)){toast('Your role does not have access to this page.');return;}page=target;search='';filter='all';render();sendPresence();window.scrollTo({top:0});}
+const routeNames={home:'home',roster:'roster',overview:'stash',history:'treasury',access:'people',settings:'settings',requests:'requests',events:'calendar',notifications:'updates'};
+const routePage=()=>Object.keys(routeNames).find(k=>location.hash.split('?')[0]==='#/'+routeNames[k]);
+function go(next,replace=false,receipt='') {const target=next==='purchase'?'overview':next;if(!can(target)){toast('Your role does not have access to this page.');return;}if(saving||$('#finance-panel')?.busy||$('#hub-panel')?.busy){toast('Please wait for the current save to finish.');return;}if(pageDirty&&!window.confirm('Leave this page and discard its unsaved form changes?'))return;page=target;search='';filter='all';window.history[replace?'replaceState':'pushState']({},'', '#/'+(routeNames[page]||page)+(receipt?'?receipt='+encodeURIComponent(receipt):''));render();sendPresence();window.scrollTo({top:0});}
+window.addEventListener('popstate',()=>{const target=routePage();if(target&&target!==page){go(target,true);window.history.replaceState({},'','#/'+(routeNames[page]||page));}});
+window.addEventListener('beforeunload',e=>{if(pageDirty||saving||$('#finance-panel')?.busy||$('#hub-panel')?.busy){e.preventDefault();e.returnValue='';}});
+document.addEventListener('pto:navigate',e=>typeof e.detail==='string'?go(e.detail):go(e.detail.page,false,e.detail.receipt));
+document.addEventListener('pto:access-tab',e=>{pendingAccessTab=e.detail;if($('#access-panel')?.openTab){$('#access-panel').openTab(pendingAccessTab);pendingAccessTab='';}});
 function render() {
   pageDirty=false;
   if(!authSession?.authenticated||authSession.user.approval!=='approved'||authSession.security?.enrollmentRequired)return;
-  const pages={roster:()=>rosterPage(data,memberSearch,memberFilter),overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage,access:()=>'<div id="access-panel"><p>Loading people and roles…</p></div>',requests:()=>'<div id="requests-panel"><p>Loading join requests…</p></div>'};
+  const pages={home:()=>'<div id="hub-panel" data-hub-mode="home"></div>',events:()=>'<div id="hub-panel" data-hub-mode="events"></div>',notifications:()=>'<div id="hub-panel" data-hub-mode="notifications"></div>',roster:()=>rosterPage(data,memberSearch,memberFilter),overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage,access:()=>'<div id="access-panel"><p>Loading people and roles…</p></div>',requests:()=>'<div id="requests-panel"><p>Loading join requests…</p></div>'};
   if(!can(page))page=Object.keys(pages).find(id=>can(id))||'none';
   const navigation={roster:['roster','people','Roster'],bands:['overview','wallet','My stash'],ledger:['history','history','Treasury'],settings:['settings','settings','Settings'],access:['access','people','People & roles'],requests:['requests','people','Join requests']};
   const groups=authSession.categories.map(category=>({...category,links:category.pages.filter(id=>can(id))})).filter(category=>category.links.length);
-  $('#app').innerHTML=`<header class="simple-header"><div class="header-top"><a class="brand" href="#" data-page="${Object.keys(pages).find(id=>can(id))||'none'}"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a>${accountMenu(authSession)}</div><nav class="category-nav" aria-label="Main navigation">${groups.map(category=>`<div class="nav-category"><span>${esc(category.id==='treasury'&&category.name==='Treasury'?'Finances':category.name)}</span><div>${category.links.map(id=>{const [route,ic,label]=navigation[id];return `<button data-page="${route}" class="simple-nav ${permissionPage(page)===id?'active':''}" ${permissionPage(page)===id?'aria-current="page"':''}>${icon(ic,16)}<span>${label}</span>${id==='requests'?`<span class="request-nav-count" ${authSession.pendingRequests?'':'hidden'}>${authSession.pendingRequests||0}</span>`:''}</button>`;}).join('')}</div></div>`).join('')}</nav></header><div class="simple-shell"><main>${securityNudge(authSession)}<div id="live-sync-note" class="notice" role="status" hidden></div>${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${page!=='none'&&page!=='overview'&&!can(page,'manage')?'<div class="readonly-notice">View access · Your role cannot save changes on this page.</div>':''}${pages[page]?pages[page]():'<div class="empty"><h1>Access pending</h1><p>Your account is ready. Ask an Owner or access manager to assign a role.</p></div>'}</main><footer><span id="connection-status">${storageLabel()}</span><div class="footer-links">${can('settings')?'<button class="text-button" data-page="settings">Backups & settings</button>':''}<button class="text-button" data-action="reload">Reload latest</button></div></footer></div>`;
-  bindForms();updateCalculator();applyPagePermissions();
-  if($('#finance-panel'))mountFinance($('#finance-panel'),authSession,{request:authRequest,canRefresh:canApplyRemote,onClean:()=>{pageDirty=false;},onSaved:()=>{pageDirty=false;toast('Finance records saved.');}});
-  if(page==='access')mountAccess($('#access-panel'),authSession,refreshSession,async()=>{authSession=await authRequest('/api/session');data=validateBackup(await cloud.load());pageDirty=false;});
+  $('#app').innerHTML=`<header class="simple-header"><div class="header-top"><a class="brand" href="#" data-page="${Object.keys(pages).find(id=>can(id))||'none'}"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a>${accountMenu(authSession)}</div><nav class="category-nav" aria-label="Main navigation"><div class="nav-category"><span>PTO</span><div><button class="simple-nav ${page==='home'?'active':''}" data-page="home">Home</button><button class="simple-nav ${page==='notifications'?'active':''}" data-page="notifications">Updates <span data-unread-count hidden></span></button>${can('roster')?'<button class="simple-nav '+(page==='events'?'active':'')+'" data-page="events">Calendar</button>':''}</div></div>${groups.map(category=>`<div class="nav-category"><span>${esc(category.id==='treasury'&&category.name==='Treasury'?'Finances':category.name)}</span><div>${category.links.map(id=>{const [route,ic,label]=navigation[id];return `<button data-page="${route}" class="simple-nav ${!['home','events','notifications'].includes(page)&&permissionPage(page)===id?'active':''}" ${!['home','events','notifications'].includes(page)&&permissionPage(page)===id?'aria-current="page"':''}>${icon(ic,16)}<span>${label}</span>${id==='requests'?`<span class="request-nav-count" ${authSession.pendingRequests?'':'hidden'}>${authSession.pendingRequests||0}</span>`:''}</button>`;}).join('')}</div></div>`).join('')}</nav></header><div class="simple-shell"><main>${page==='home'?securityNudge(authSession):''}<div id="live-sync-note" class="notice" role="status" hidden></div>${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${!['none','overview','home','events','notifications'].includes(page)&&!can(page,'manage')?'<div class="readonly-notice">View access · Your role cannot save changes on this page.</div>':''}${pages[page]?pages[page]():'<div class="empty"><h1>Access pending</h1><p>Your account is ready. Ask an Owner or access manager to assign a role.</p></div>'}</main><footer><span id="connection-status">${storageLabel()}</span><div class="footer-links">${can('settings')?'<button class="text-button" data-page="settings">Backups & settings</button>':''}<button class="text-button" data-action="reload">Reload latest</button><span id="release-status"></span></div></footer></div>`;
+  bindForms();updateCalculator();applyPagePermissions();mountReleaseNotice($('#release-status'),()=>!pageDirty&&!saving&&!$('#finance-panel')?.busy);
+  if($('#hub-panel'))mountHub($('#hub-panel'),authSession,{request:authRequest,canRefresh:canApplyRemote,onClean:()=>{pageDirty=false;}});
+  if($('#finance-panel'))mountFinance($('#finance-panel'),authSession,{request:authRequest,canRefresh:canApplyRemote,onClean:()=>{pageDirty=false;},onSaved:()=>{pageDirty=false;toast('Finance records saved.');}}).then(()=>{const receipt=new URLSearchParams(location.hash.split('?')[1]||'').get('receipt');if(receipt)$('#finance-panel')?.openReceipt?.(receipt);});
+  if(page==='access')mountAccess($('#access-panel'),authSession,async()=>{await refreshSession();toast('Website access saved.');},async()=>{authSession=await authRequest('/api/session');data=validateBackup(await cloud.load());pageDirty=false;}).then(()=>{if(pendingAccessTab&&$('#access-panel')?.openTab){$('#access-panel').openTab(pendingAccessTab);pendingAccessTab='';}});
   if(page==='requests')mountRequests($('#requests-panel'),authSession,async message=>{data=validateBackup(await cloud.load());await pollSession();if(message)toast(message);});
 }
 function applyPagePermissions(){
@@ -123,9 +133,9 @@ function contactCards() {
 function contactsPage() {
   return title('','Player balances','Band balances for members and other players. These records do not create website logins.',`<button class="button secondary" data-page="history">Ledger</button><button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
 }
-function bandSetting(b){return `<div class="setting-band" data-setting-band="${esc(b.id)}"><input type="color" name="color" value="${b.color}" aria-label="Band color"><input name="bandname" aria-label="Band name" value="${esc(b.name)}" maxlength="40" required><label class="money-input"><span>$</span><input name="price" aria-label="Default unit price" value="${b.price/100}" type="number" min="0" max="1000000000" step="0.01" required></label><label class="toggle-label"><input type="checkbox" name="active" ${b.active?'checked':''}> Active</label><button type="button" class="icon-button" data-move="up" aria-label="Move band up">↑</button><button type="button" class="icon-button" data-move="down" aria-label="Move band down">↓</button></div>`;}
+function bandSetting(b){return `<div class="setting-band" data-setting-band="${esc(b.id)}"><input type="color" name="color" value="${b.color}" aria-label="Band color"><input name="bandname" aria-label="Band name" value="${esc(b.name)}" maxlength="40" required><label class="money-input"><span>$</span><input name="price" aria-label="Default unit price" value="${b.price/100}" type="number" min="0" max="1000000000" step="0.01" required></label><label class="toggle-label"><input type="checkbox" name="active" ${b.active?'checked':''}> Active</label><button type="button" class="icon-button" data-move="up" aria-label="Move band up">↑</button><button type="button" class="icon-button" data-move="down" aria-label="Move band down">↓</button><button type="button" class="text-button" data-remove-band="${esc(b.id)}">Remove</button></div>`;}
 function settingsPage() {
-  return title('','Settings','Manage your roster, band prices, and backups.')+gangSettings(data)+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>Records save to this workspace. This download covers roster and earlier ledger records. Account-linked deposits, payments, and account details are included in full encrypted backups under People & roles.</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Download backup</button><button class="button secondary" data-action="import">Restore backup</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section>`;
+  return title('','Settings','Manage your roster, band prices, and backups.')+gangSettings(data)+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>Records save to this workspace. This download covers roster and earlier ledger records. Account-linked deposits, payments, and account details are included in full encrypted backups under People & roles.</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Export roster & earlier ledger</button>${authSession.user.owner?'<button class="button secondary" data-action="full-backup">Full encrypted backup</button>':''}<button class="button secondary" data-action="import">Import roster & earlier ledger</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section>`;
 }
 function updateCalculator() {
   if (!$('#purchase-form')) return;
@@ -250,21 +260,23 @@ document.addEventListener('click',async e=>{
   if(button.dataset.editContact){contactForm(button.dataset.editContact);return;}
   if(button.dataset.filter){filter=button.dataset.filter;render();return;}
   if(button.dataset.step){const input=[...document.querySelectorAll('[data-quantity]')].find(el=>el.dataset.quantity===button.dataset.band);input.value=Math.min(1000000,Math.max(0,(Number(input.value)||0)+Number(button.dataset.step)));updateCalculator();return;}
-  if(button.dataset.move){const row=button.closest('[data-setting-band]');if(button.dataset.move==='up'&&row.previousElementSibling)row.before(row.previousElementSibling);else if(button.dataset.move==='down'&&row.nextElementSibling)row.after(row.nextElementSibling);return;}
+  if(button.dataset.move){pageDirty=true;const row=button.closest('[data-setting-band]');if(button.dataset.move==='up'&&row.previousElementSibling)row.before(row.previousElementSibling);else if(button.dataset.move==='down'&&row.nextElementSibling)row.after(row.nextElementSibling);return;}
+  if(button.dataset.removeBand){if(window.confirm('Remove this unused band type? If it has saved receipts, keep it and turn Active off instead.')){button.closest('[data-setting-band]').remove();pageDirty=true;}return;}
   switch(button.dataset.action){
     case 'reset-roster':memberSearch='';memberFilter='current';render();$('#roster-search')?.focus();break;
     case 'reset-history':search='';filter='all';render();$('#history-search')?.focus();break;
     case 'reset-contacts':search='';render();$('#contact-search')?.focus();break;
     case 'account':accountDialog(authSession.user,openModal,refreshSession);break;
-    case 'logout':await authRequest('/api/auth/logout',{method:'POST',body:{}});$('#modal').close();authSession=null;cloud=null;clearDraft();await start();break;
+    case 'logout':clearAllDrafts();await authRequest('/api/auth/logout',{method:'POST',body:{}});$('#modal').close();authSession=null;cloud=null;clearDraft();await start();break;
     case 'close':$('#modal').close();break;
     case 'invite-member':inviteMember();break;
     case 'existing-member':await addExistingMember();break;
     case 'gang-notes':editGangNotes();break;
     case 'add-contact':contactForm();break;
     case 'pay-full':draftPaid=String(updateCalculator()/100);$('#amount-paid').value=draftPaid;updateCalculator();break;
-    case 'add-band':$('#band-settings').insertAdjacentHTML('beforeend',bandSetting({id:uid(),name:'New band',color:'#b9d984',price:0,active:true}));break;
-    case 'reload':location.reload();break;
+    case 'full-backup':pendingAccessTab='backups';go('access');break;
+    case 'add-band':pageDirty=true;$('#band-settings').insertAdjacentHTML('beforeend',bandSetting({id:uid(),name:'New band',color:'#b9d984',price:0,active:true}));break;
+    case 'reload':if(!pageDirty||window.confirm('Discard unsaved changes and reload?'))location.reload();break;
     case 'export':{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`pto-roaster-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup downloaded. Keep it somewhere safe.');break;}
     case 'import':$('#backup-file').click();break;
   }
@@ -277,7 +289,7 @@ async function openWorkspace(session){
   if(session.user.approval!=='approved'){cloud=null;approvalScreen(session,openWorkspace);return;}
   if(session.security?.enrollmentRequired){cloud=null;securityGate(session,openWorkspace,authRequest);return;}
   cloud=new CloudLedger();loadError='';
-  data=validateBackup(await cloud.load());clearDraft();render();
+  data=validateBackup(await cloud.load());clearDraft();page=routePage()||(session.user.owner?'home':permits(session.permissions,'ledger')?'history':permits(session.permissions,'bands')?'overview':'roster');window.history.replaceState({},'','#/'+(routeNames[page]||page)+(location.hash.includes('?')?'?'+location.hash.split('?')[1]:''));render();
   sendPresence();
 }
 let presenceBusy=false;
@@ -292,6 +304,7 @@ async function pollSession(){
   syncBusy=true;
   try{
     const previous=authSession,updated=await authRequest('/api/session');
+    if(!updated.authenticated)clearAllDrafts();
     if(!updated.authenticated||updated.user.approval!==previous.user.approval||JSON.stringify(updated.permissions)!==JSON.stringify(previous.permissions)||JSON.stringify(updated.categories)!==JSON.stringify(previous.categories)||JSON.stringify(updated.roles)!==JSON.stringify(previous.roles)||JSON.stringify(updated.security)!==JSON.stringify(previous.security)){
       $('#modal').close();await openWorkspace(updated);return;
     }
@@ -303,17 +316,18 @@ async function pollSession(){
     if(updated.user.profileRevision!==previous.user.profileRevision){const menu=document.querySelector('.account-menu');if(menu)menu.outerHTML=accountMenu(updated);}
     document.querySelectorAll('.request-nav-count').forEach(badge=>{badge.textContent=updated.pendingRequests||0;badge.hidden=!updated.pendingRequests;});
     const versions=updated.versions||{};let waiting=false;
-    if(cloud&&Number.isSafeInteger(versions.workspace)&&versions.workspace!==cloud.revision){
+    if(!['overview','history','home','events','notifications'].includes(page)&&cloud&&Number.isSafeInteger(versions.workspace)&&versions.workspace!==cloud.revision){
       if(!canApplyRemote())waiting=true;
       else{
         const currentCloud=cloud,snapshot=await currentCloud.request('/api/ledger');
         if(currentCloud===cloud&&canApplyRemote()&&snapshot.revision>=currentCloud.revision){
           data=validateBackup(snapshot.data);currentCloud.revision=snapshot.revision;loadError='';
-          if(!['access','requests','overview','history'].includes(page))render();
+          if(!['access','requests','overview','history','home','events','notifications'].includes(page))render();
           else if(page==='history'&&$('#history-results'))$('#history-results').innerHTML=table(filteredPurchases());
         }else waiting=true;
       }
     }
+    const hub=$('#hub-panel');if(hub?.refreshFromServer&&(hub.seenRevision!==versions.workspace||hub.seenAccounts!==versions.accounts||hub.seenRequests!==versions.requests)){if(!canApplyRemote()||!await hub.refreshFromServer())waiting=true;else{hub.seenAccounts=versions.accounts;hub.seenRequests=versions.requests;}}
     const finance=$('#finance-panel');
     if(finance?.refreshFromServer&&(finance.seenRevision!==versions.workspace||finance.seenAccounts!==versions.accounts||finance.seenDay!==financeDay())){
       if(!canApplyRemote()||!await finance.refreshFromServer())waiting=true;
@@ -329,14 +343,19 @@ async function pollSession(){
       else if(await access.refreshFromServer(canApplyRemote))access.seenVersions={...versions};
       else waiting=true;
     }
+    pollFailures=0;
     syncMessage(waiting?'New updates are available. Your edits are preserved. Finish or cancel editing to load the latest records.':'');
+    mountReleaseNotice($('#release-status'),()=>!pageDirty&&!saving&&!$('#finance-panel')?.busy);
     if($('#connection-status')&&!loadError)$('#connection-status').textContent=storageLabel()+' · Updates connected';
   }catch{
+    pollFailures=Math.min(pollFailures+1,4);
     syncMessage('Connection interrupted. Checking for updates again automatically.');
     if($('#connection-status'))$('#connection-status').textContent='Updates disconnected · retrying';
   }finally{syncBusy=false;}
 }
-setInterval(pollSession,3000);
+let pollFailures=0;
+async function schedulePoll(){await pollSession();setTimeout(schedulePoll,Math.min(30000,3000*2**pollFailures)+Math.floor(Math.random()*500));}
+setTimeout(schedulePoll,3000);
 window.addEventListener('focus',pollSession);
 $('#modal').addEventListener('close',pollSession);
 async function start() {

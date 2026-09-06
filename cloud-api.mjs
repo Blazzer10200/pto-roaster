@@ -1,3 +1,4 @@
+import {auditDocument,auditDetails} from './audit-details.js';
 import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'node:crypto';
 import {Buffer} from 'node:buffer';
 import {promisify} from 'node:util';
@@ -5,8 +6,9 @@ import {applyOwnerPasswordReset} from './owner-password-reset.mjs';
 import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
+import {hubRequest} from './hub-model.js';
 import {financeRequest} from './finance-api.js';
-import {enableMemberBands,enableFinanceRoles} from './access-model.js';
+import {preserveNavigationPermissions,enableMemberBands,enableFinanceRoles} from './access-model.js';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import QRCodeSVG from 'qrcode/lib/renderer/svg-tag.js';
 import {validateBackup} from './model.js';
@@ -18,7 +20,7 @@ export const githubOrigin='https://blazzer10200.github.io';
 export const allowedOrigin=request=>[new URL(request.url).origin,githubOrigin].includes(request.headers.get('origin'));
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff',...headers}});
-const publicUser=u=>({id:u.id,...profileOf(u),owner:!!u.owner,disabled:!!u.disabled,approval:u.approval,requestedAt:u.requested_at,reviewedAt:u.reviewed_at,roleIds:JSON.parse(u.roles),mfaVerified:!!u.mfa_verified,remembered:!!u.remembered});
+const publicUser=u=>({id:u.id,...profileOf(u),owner:!!u.owner,accessRevision:u.accessRevision||0,disabled:!!u.disabled,approval:u.approval,requestedAt:u.requested_at,reviewedAt:u.reviewed_at,roleIds:JSON.parse(u.roles),mfaVerified:!!u.mfa_verified,remembered:!!u.remembered});
 const passwordValid=p=>{if(typeof p!=='string'||p.length<12||p.length>128)fail('Use a password between 12 and 128 characters.');};
 // Bound expensive hashing across requests in this isolate (scrypt uses ~32 MiB).
 let cryptoJobs=0;
@@ -86,7 +88,7 @@ export async function handleCloudApi(request,env){
       const s=JSON.parse(row.document),before=row.document,events=[];let responseToken=null,responseRemember=false;
       enableMemberBands(s.config);
       enableFinanceRoles(s.config);
-      const audit=(id,action,document=null)=>{s.auditRevision=(s.auditRevision||0)+1;events.push({at:new Date(now).toISOString(),user_id:id,action,document});};
+      const audit=(id,action,document=null)=>{s.auditRevision=(s.auditRevision||0)+1;events.push({at:new Date(now).toISOString(),user_id:id,action,document:auditDocument(s.users.find(u=>u.id===id)?.name,document)});};
       const findUser=login=>s.users.find(u=>u.username.toLowerCase()===login||u.email===login);
       const auth=()=>{const session=s.sessions.find(x=>x.hash===digest(tokenOf(request))&&x.expires>now),u=session&&s.users.find(u=>u.id===session.user_id&&!u.disabled);return u?{...u,mfa_verified:session.mfa_verified,remembered:!!session.remember}:null;};
       let user=auth();const securityRow=id=>s.security.find(r=>r.user_id===id),enabled=id=>!!securityRow(id)?.secret;
@@ -152,6 +154,7 @@ export async function handleCloudApi(request,env){
         if(enabled(user.id)&&!user.mfa_verified)return json({error:'Sign in again with your authenticator.',reauthenticate:true},401);
         if(user.approval!=='approved')fail(user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.',403);
         const perms=permissions(user),requirePage=(p,l='view')=>{if(!permits(perms,p,l))fail('Your role does not have permission for this page.',403);};
+        if(route.startsWith('/api/hub')){const proposal=hubRequest({route,method,body,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:permissions(user),actor:user,users:s.users,config:s.config,now});if(proposal){if(proposal.nextData){s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(proposal.nextData)};audit(user.id,proposal.action);}return json(proposal.payload);}}
         if(route.startsWith('/api/finance')){
           const proposal=financeRequest({route,method,body,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user,users:s.users,now});
           if(proposal){if(proposal.nextData){s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(validateBackup(proposal.nextData))};audit(user.id,proposal.action);}return json(proposal.payload);}
@@ -174,10 +177,10 @@ export async function handleCloudApi(request,env){
             const current=s.sessions.find(r=>r.hash===digest(tokenOf(request)));current.last_seen=now;current.page=body.page;return json({ok:true});
           }
         }
-        if(route==='/api/security/backup-status'&&method==='GET'){if(!user.owner)fail('Only the Owner can view full backup status.',403);const r=await first('SELECT day FROM pto_backups ORDER BY day DESC LIMIT 1');return json({enabled:true,savedAt:r?.day?new Date(r.day).toISOString():null,hosted:true});}
+        if(route==='/api/security/backup-status'&&method==='GET'){if(!user.owner)fail('Only the Owner can view full backup status.',403);const r=await first('SELECT day FROM pto_backups ORDER BY day DESC LIMIT 1');return json({enabled:true,savedDay:r?.day||null,hosted:true});}
         if(route==='/api/security/backup'&&method==='POST'){if(!user.owner)fail('Only the Owner can export a full security backup.',403);await reauthenticate();audit(user.id,'Encrypted full backup downloaded');return json(await encryptBackup(await snapshot(),body.passphrase));}
         if(route==='/api/audit'&&method==='GET'){
-          requirePage('access','manage');const rows=await all('SELECT id,at,user_id,action FROM pto_events WHERE id<? ORDER BY id DESC LIMIT 51',Number(searchParams.get('before'))||Number.MAX_SAFE_INTEGER);return json({events:rows.slice(0,50).map(e=>({...e,actor:s.users.find(u=>u.id===e.user_id)?.name||'Site operator'})),next:rows.length>50?rows[49].id:null});
+          requirePage('access','manage');const rows=await all('SELECT id,at,user_id,action,document FROM pto_events WHERE id<? ORDER BY id DESC LIMIT 51',Number(searchParams.get('before'))||Number.MAX_SAFE_INTEGER);return json({events:rows.slice(0,50).map(e=>({id:e.id,at:e.at,action:e.action,actor:auditDetails(e.document).actorName||s.users.find(u=>u.id===e.user_id)?.name||'Deleted account',changes:auditDetails(e.document).changes||[]})),next:rows.length>50?rows[49].id:null});
         }
         if(route==='/api/requests'&&method==='GET'){requirePage('requests');const data=validateBackup(JSON.parse(s.workspace.document));return json({requests:s.users.filter(u=>['pending','denied'].includes(u.approval)).map(publicUser),roles:s.config.roles.filter(r=>grantsWithin([r.id])),ranks:data.ranks,revision:s.workspace.revision,unlinkedMembers:permits(perms,'roster','manage')?data.members.filter(m=>!m.userId).map(({id,name,rank})=>({id,name,rank})):[]});}
         if(route.startsWith('/api/requests/')&&method==='POST'){
@@ -196,11 +199,11 @@ export async function handleCloudApi(request,env){
         }
         if(route==='/api/access'){
           requirePage('access',method==='GET'?'view':'manage');if(method==='GET')return json({...s.config,users:s.users.map(publicUser)});
-          if(method==='PUT'){const next=validateAccess(body);if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');s.config={...next,revision:next.revision+1,financeAccessVersion:1,financeRolesVersion:1};audit(user.id,'Roles and categories updated');return json(s.config);}
+          if(method==='PUT'){const next=preserveNavigationPermissions(s.config,validateAccess(body));if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');const previousConfig=s.config;s.config={...next,revision:next.revision+1,financeAccessVersion:1,financeRolesVersion:1};audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:s.config}));return json(s.config);}
         }
         if(route==='/api/users'&&method==='POST'){requirePage('access','manage');const f=fields(body);passwordValid(body.password);assertRoles(body.roleIds);const u=addUser(f,await hashPassword(body.password),body.roleIds,'approved');audit(user.id,'Account created: '+u.name);return json({ok:true},201);}
         if(route.startsWith('/api/users/')&&method==='PUT'){
-          requirePage('access','manage');const target=s.users.find(u=>u.id===route.slice(11));if(!target)fail('Account not found.',404);if(target.owner)fail('The Owner account and its access are protected.');if(target.approval!=='approved')fail('Review this account in Join requests first.');if(target.id===user.id&&body.disabled)fail('You cannot disable your own account.');assertRoles(body.roleIds);if(typeof body.disabled!=='boolean')fail('Invalid account status.');target.roles=JSON.stringify(body.roleIds);target.disabled=Number(body.disabled);revoke(target.id);audit(user.id,'Account access updated: '+target.name);return json({ok:true});
+          requirePage('access','manage');const target=s.users.find(u=>u.id===route.slice(11));if(!target)fail('Account not found.',404);if(target.owner)fail('The Owner account and its access are protected.');if(target.approval!=='approved')fail('Review this account in Join requests first.');if(target.id===user.id&&body.disabled)fail('You cannot disable your own account.');assertRoles(body.roleIds);if(typeof body.disabled!=='boolean')fail('Invalid account status.');if(body.accessRevision!==(target.accessRevision||0))fail('Access changed since you opened this person. Reload their current access before saving.',409);if(JSON.stringify([...body.roleIds].sort())===JSON.stringify(JSON.parse(target.roles).sort())&&body.disabled===!!target.disabled)return json({ok:true,unchanged:true});const previousRoles=JSON.parse(target.roles),previousDisabled=!!target.disabled;target.roles=JSON.stringify(body.roleIds);target.disabled=Number(body.disabled);target.accessRevision=(target.accessRevision||0)+1;revoke(target.id);audit(user.id,'Account access updated: '+target.name,JSON.stringify({previousRoles,roleIds:body.roleIds,previousDisabled,disabled:body.disabled}));return json({ok:true});
         }
         if(route==='/api/ledger'){
           const current=validateBackup(JSON.parse(s.workspace.document));if(method==='GET')return json({data:visibleData(current,perms),revision:s.workspace.revision});

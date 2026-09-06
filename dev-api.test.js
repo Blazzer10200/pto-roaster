@@ -36,7 +36,7 @@ test('role changes take effect on existing sessions; disabled accounts and logou
   const config=await (await api.handle(request('/api/access','GET',undefined,ownerCookie))).json();const member=config.users.find(u=>!u.owner);
   config.roles.find(r=>r.id==='member').categories.gang='none';assert.equal((await api.handle(request('/api/access','PUT',config,ownerCookie))).status,200);
   const restricted=await (await api.handle(request('/api/session','GET',undefined,cookie))).json();assert.equal(restricted.permissions.roster,'none');
-  assert.equal((await api.handle(request('/api/users/'+member.id,'PUT',{roleIds:['member'],disabled:true},ownerCookie))).status,200);
+  assert.equal((await api.handle(request('/api/users/'+member.id,'PUT',{roleIds:['member'],disabled:true,accessRevision:0},ownerCookie))).status,200);
   assert.equal((await api.handle(request('/api/ledger','GET',undefined,cookie))).status,401);
   await api.handle(request('/api/auth/logout','POST',{},ownerCookie));assert.equal((await api.handle(request('/api/ledger','GET',undefined,ownerCookie))).status,401);
 });

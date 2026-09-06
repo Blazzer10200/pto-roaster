@@ -28,11 +28,11 @@ Roster removal requires Roster Manage and a current workspace revision. It does 
 
 Full encrypted backups include account-linked deposits, payouts and weekly bills. The ordinary Settings JSON export covers roster and earlier ledger records; its restore preserves current account-linked finances.
 
-**People & roles → Activity** is limited to account administrators. It displays actor, time, and account/workspace events, with pagination. Stored workspace snapshots and security details are not returned in this activity feed. This local database is not a tamper-proof external audit service.
+**People & roles → Activity** is limited to account administrators. It displays actor, time, account/workspace events, and access-change summaries, with pagination. New audit records retain the actor name after deletion. Existing records without a stored actor name cannot reconstruct a deleted identity. Stored workspace snapshots and security details are not returned in this activity feed. This local database is not a tamper-proof external audit service.
 
 The server creates at most one encrypted daily snapshot under `.local/backups/` at startup or an hourly check while running. The Backups tab reports the snapshot time or an error. No automatic deletion/retention cleanup is configured. These snapshots require the original `.local/security.key`; keep that key private and backed up separately. Snapshots on the same drive do not protect against losing the computer.
 
-**People & roles → Backups** lets the Owner download a complete encrypted backup protected by a separate 15–128-character passphrase. It contains accounts, password hashes, encrypted MFA configuration and its key, recovery-code hashes, roles, security policy, workspace, and activity. Sessions, pending MFA enrollment secrets, challenges, and rate-limit buckets are excluded. A ledger JSON download under Settings is **not** a full security backup.
+**People & roles → Backups** lets the Owner download a complete encrypted backup protected by a separate 15–128-character passphrase. It contains accounts, password hashes, encrypted MFA configuration and its key, recovery-code hashes, roles, security policy, workspace, and activity. Sessions, pending MFA enrollment secrets, challenges, and rate-limit buckets are excluded. The workspace includes account-linked deposits, payouts, reversals, cashbook, calendar, availability, private notes, and notification read state. A roster/earlier-ledger JSON download under Settings is **not** a full backup.
 
 `restore-backup.mjs` validates and restores only into a **new directory**, never the live workspace. For a downloaded `.ptobak`, the operator supplies `PTO_BACKUP_PASSWORD` privately in the environment and runs `node restore-backup.mjs BACKUP_FILE NEW_DIRECTORY`. For a local daily snapshot, supply `PTO_BACKUP_KEY_FILE` pointing to the original key instead. Clear temporary environment secrets afterward. The restored directory contains a database/key pair, without signed-in sessions. Verify the copy before an explicitly authorized switchover. A forgotten backup passphrase cannot be recovered.
 
@@ -42,9 +42,17 @@ An operator can recover an existing Owner password through the private `PTO_OWNE
 
 - The Worker stores account/workspace state in D1 using an atomic revision comparison. Competing mutations rerun against current permissions before committing; state, audit records and the daily encrypted snapshot commit together. Per-account and Cloudflare client-IP limits are shared in D1. The document is capped at 1.4 MB; normalize storage before approaching this limit.
 - `PTO_SECURITY_KEY` is a private runtime secret. The one-time `/api/operator/migrate` route additionally requires `PTO_MIGRATION_TOKEN` and rejects all imports after initialization. The public cannot claim the Owner account. Remove the migration secret after the verified import.
-- Legacy hosted ledger tables remain preserved for operator recovery and are no longer exposed through the API. Hosted daily snapshots are encrypted, chunked in D1, and created on the first state change each UTC day; they are not an independent off-provider backup. Download a passphrase-protected full backup to a separate location.
+- Legacy hosted ledger tables remain preserved for operator recovery and are no longer exposed through the API. Hosted daily snapshots are encrypted, chunked in D1, and created on the first state change each UTC day; their status reports the saved UTC day; they are not an independent off-provider backup. Download a passphrase-protected full backup to a separate location.
 - GitHub Pages CORS is restricted to the configured GitHub origin. Public pages have a CSP meta policy; hosted responses add frame protection and no-store API headers. No ChatGPT login is involved.
 - Complete Owner MFA/recovery setup, require admin MFA, and configure off-device encrypted backups plus a tested restoration procedure.
 - Review signup abuse controls against real traffic and verify recovery, session revocation, audit access, and security headers on the final domain. Run the security regression tests and dependency audit.
 
 Implementation references: [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238), [OWASP MFA guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html). The TOTP tests include the RFC's SHA-1 test vectors.
+
+## Drafts and role safety
+
+Stash draft quantities and notes are namespaced to the signed-in account in device storage for 24 hours. Submitting, discarding, signing out, or detecting loss of authentication clears drafts. Passwords and session tokens are not stored there. This convenience is device-local; shared-device users should sign out when finished.
+
+Account access changes require the current access revision. A stale form cannot undo a newer disable or role change. True no-op saves preserve sessions; actual changes revoke them. Menu category moves preserve previous effective page grants. Private leadership notes are enforced by the server, separately from shared roster notes.
+
+Owner-only reversal and reconciliation controls retain the original finance record and record who corrected it and why. Partial payouts cannot exceed outstanding amounts. Payouts validate the exact reviewed deposit set and balance; idempotent request IDs prevent duplicate payment on retries. Optional deposit verification is a separate check from payment confirmation.

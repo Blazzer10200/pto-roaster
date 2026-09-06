@@ -1,3 +1,4 @@
+import {validateHub} from './hub-model.js';
 import {validateFinance} from './finance-model.js';
 export const cents = value => Math.round(Number(value) * 100);
 export const total = purchase => purchase.lines.reduce((sum, line) => sum + line.quantity * line.price, 0);
@@ -43,6 +44,7 @@ export function rosterCounts(members, limit=0) {
 }
 export function validateBackup(data) {
   if(data?.finance!==undefined)validateFinance(data.finance);
+  if(data?.hub!==undefined)validateHub(data.hub);
   if (!data || data.version !== 1 || typeof data.name !== 'string' || !data.name.trim() || data.name.length > 40 || !Array.isArray(data.bands) || !Array.isArray(data.contacts) || !Array.isArray(data.purchases)) throw new Error('This is not a valid PTO Roaster backup.');
   const ids = new Set();
   const identity = item => { if (!item || typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new Error('Invalid or duplicate record ID.'); ids.add(item.id); };

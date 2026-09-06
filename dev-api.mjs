@@ -1,3 +1,4 @@
+import {auditDocument} from './audit-details.js';
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'node:crypto';
 import {promisify} from 'node:util';
@@ -6,12 +7,13 @@ import {freshData,validateBackup} from './model.js';
 import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
+import {hubRequest} from './hub-model.js';
 import {financeRequest} from './finance-api.js';
-import {enableMemberBands,enableFinanceRoles} from './access-model.js';
+import {preserveNavigationPermissions,enableMemberBands,enableFinanceRoles} from './access-model.js';
 import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
 const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
-const publicUser=user=>({id:user.id,...profileOf(user),owner:!!user.owner,disabled:!!user.disabled,approval:user.approval,requestedAt:user.requested_at,reviewedAt:user.reviewed_at,roleIds:JSON.parse(user.roles),mfaVerified:!!user.mfa_verified,remembered:!!user.session_remember});
+const publicUser=user=>({id:user.id,...profileOf(user),owner:!!user.owner,accessRevision:user.accessRevision||0,disabled:!!user.disabled,approval:user.approval,requestedAt:user.requested_at,reviewedAt:user.reviewed_at,roleIds:JSON.parse(user.roles),mfaVerified:!!user.mfa_verified,remembered:!!user.session_remember});
 async function hashPassword(password,salt=randomBytes(16).toString('hex')){return salt+':'+Buffer.from(await scrypt(password,salt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024})).toString('hex');}
 async function verifyPassword(password,stored){const [salt,hash]=stored.split(':');const result=await hashPassword(password,salt);return timingSafeEqual(Buffer.from(result.split(':')[1],'hex'),Buffer.from(hash,'hex'));}
 const validatePassword=value=>{if(typeof value!=='string'||value.length<12||value.length>128)throw Error('Use a password between 12 and 128 characters.');};
@@ -36,7 +38,7 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
     CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,user_id TEXT NOT NULL,action TEXT NOT NULL,document TEXT);`);
   // Additive local migration preserves all existing accounts and passwords.
   const columns=new Set(db.prepare('PRAGMA table_info(users)').all().map(column=>column.name));
-  for(const [name,type] of Object.entries({username:'TEXT',approval:"TEXT NOT NULL DEFAULT 'approved'",requested_at:'TEXT',reviewed_at:'TEXT',reviewed_by:'TEXT',stateId:"TEXT NOT NULL DEFAULT ''",phone:"TEXT NOT NULL DEFAULT ''",profileRevision:'INTEGER NOT NULL DEFAULT 0'}))if(!columns.has(name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({username:'TEXT',approval:"TEXT NOT NULL DEFAULT 'approved'",requested_at:'TEXT',reviewed_at:'TEXT',reviewed_by:'TEXT',stateId:"TEXT NOT NULL DEFAULT ''",phone:"TEXT NOT NULL DEFAULT ''",profileRevision:'INTEGER NOT NULL DEFAULT 0',accessRevision:'INTEGER NOT NULL DEFAULT 0'}))if(!columns.has(name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
   for(const row of db.prepare('SELECT id,email FROM users WHERE username IS NULL').all()){
     let username=row.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_.-]/g,'').slice(0,24);if(username.length<3)username='user';
     if(db.prepare('SELECT id FROM users WHERE username=?').get(username))username+='-'+row.id.slice(0,6);
@@ -61,7 +63,7 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
   const allUsers=()=>db.prepare('SELECT * FROM users').all();
   const writeProfile=u=>db.prepare('UPDATE users SET name=?,username=?,stateId=?,phone=?,profileRevision=? WHERE id=?').run(u.name,u.username,u.stateId,u.phone,u.profileRevision,u.id);
   const writeMembers=(data,revision)=>db.prepare('UPDATE workspace SET document=?,revision=? WHERE id=1').run(JSON.stringify(data),revision+1);
-  const audit=(id,action,document=null)=>db.prepare('INSERT INTO audit(at,user_id,action,document) VALUES(?,?,?,?)').run(new Date().toISOString(),id,action,document);
+  const audit=(id,action,document=null)=>db.prepare('INSERT INTO audit(at,user_id,action,document) VALUES(?,?,?,?)').run(new Date().toISOString(),id,action,auditDocument(db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name,document));
   const cookieToken=request=>(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('pto_session='))?.slice(12)||'';
   const auth=request=>{
     const session=db.prepare('SELECT users.*,sessions.mfa_verified,sessions.remember AS session_remember FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.hash=? AND sessions.expires>? AND users.disabled=0').get(digest(cookieToken(request)),now());
@@ -134,6 +136,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         db.prepare('UPDATE users SET password=? WHERE id=?').run(password,user.id);security.revoke(user.id);audit(user.id,'Password changed');return newSession(user,security.enabled(user.id));
       }
       if(user.approval!=='approved')return json({error:user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.'},403);
+      if(route.startsWith('/api/hub')){const current=rawLedger(),proposal=hubRequest({route,method,body,...current,permissions,actor:user,users:allUsers(),config:config(),now:now()});if(proposal){if(proposal.nextData){db.exec('BEGIN IMMEDIATE');try{writeMembers(proposal.nextData,current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}}return json(proposal.payload);}}
       if(route.startsWith('/api/finance')){
         const current=rawLedger(),proposal=financeRequest({route,method,body,data:current.data,revision:current.revision,permissions,actor:user,users:allUsers(),now:now()});
         if(proposal){if(proposal.nextData){db.exec('BEGIN IMMEDIATE');try{writeMembers(validateBackup(proposal.nextData),current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}return json(proposal.payload);}
@@ -196,7 +199,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         if(!permits(permissions,'access',method==='GET'?'view':'manage'))return json({error:'Only access managers can manage roles and accounts.'},403);
         if(method==='GET')return json({...config(),users:db.prepare('SELECT * FROM users ORDER BY owner DESC,name').all().map(publicUser)});
         if(method==='PUT'){
-          const next=validateAccess(body);if(next.revision!==config().revision)return json({error:'Access settings changed. Reload before saving.'},409);
+          const next=preserveNavigationPermissions(config(),validateAccess(body));if(next.revision!==config().revision)return json({error:'Access settings changed. Reload before saving.'},409);
           for(const row of db.prepare('SELECT roles FROM users').all())if(JSON.parse(row.roles).some(id=>!next.roles.some(r=>r.id===id)))throw Error('Reassign users before removing an assigned role.');
           const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles,financeAccessVersion:1,financeRolesVersion:1};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
         }
@@ -219,8 +222,10 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         if(target.approval!=='approved')throw Error('Review this account in Join requests first.');
         if(target.id===user.id&&body.disabled)throw Error('You cannot disable your own account.');
         assertRoles(body.roleIds);if(typeof body.disabled!=='boolean')throw Error('Invalid account status.');
-        db.prepare('UPDATE users SET roles=?,disabled=? WHERE id=?').run(JSON.stringify(body.roleIds),Number(body.disabled),target.id);
-        db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(user.id,'Account access updated: '+target.name,JSON.stringify({targetId:target.id,previousRoles:JSON.parse(target.roles),roleIds:body.roleIds,disabled:body.disabled}));return json({ok:true});
+        if(body.accessRevision!==(target.accessRevision||0))return json({error:'Access changed since you opened this person. Reload their current access before saving.'},409);
+        if(JSON.stringify([...body.roleIds].sort())===JSON.stringify(JSON.parse(target.roles).sort())&&body.disabled===!!target.disabled)return json({ok:true,unchanged:true});
+        db.prepare('UPDATE users SET roles=?,disabled=?,accessRevision=accessRevision+1 WHERE id=?').run(JSON.stringify(body.roleIds),Number(body.disabled),target.id);
+        db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(user.id,'Account access updated: '+target.name,JSON.stringify({targetId:target.id,previousRoles:JSON.parse(target.roles),previousDisabled:!!target.disabled,roleIds:body.roleIds,disabled:body.disabled}));return json({ok:true});
       }
       if(route==='/api/ledger'){
         const current=rawLedger();

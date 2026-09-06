@@ -1,5 +1,12 @@
 export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'My stash'},{id:'ledger',name:'Treasury'},{id:'settings',name:'Settings'},{id:'access',name:'People & roles'},{id:'requests',name:'Join requests'}];
 export const accessLevels=['none','view','manage'];
+// Menu rearrangement is not an authorization change. Freeze affected grants.
+export function preserveNavigationPermissions(previous,next){
+  for(const role of next.roles){const old=previous.roles.find(r=>r.id===role.id);if(!old)continue;
+    const effective=permissionsFor({roleIds:[old.id]},previous);
+    for(const page of accessPages)if(previous.categories.find(c=>c.pages.includes(page.id))?.id!==next.categories.find(c=>c.pages.includes(page.id))?.id)role.pages[page.id]=effective[page.id];
+  }return next;
+}
 export const treasurerRole=()=>({id:'treasurer',name:'Treasurer',color:'#d6b36a',categories:{},pages:{roster:'view',bands:'view',ledger:'manage',settings:'none',access:'none',requests:'none'}});
 export function enableFinanceRoles(config){
   if(config.financeRolesVersion===1)return false;
@@ -43,11 +50,14 @@ export function visibleData(data,permissions){
 }
 export function mergeAuthorizedData(current,incoming,permissions){
   if(incoming.finance!==undefined&&JSON.stringify(incoming.finance)!==JSON.stringify(current.finance))throw Error('Use the finance controls to submit deposits and confirm payments.');
+  if(incoming.hub!==undefined&&JSON.stringify(incoming.hub)!==JSON.stringify(current.hub))throw Error('Use the gang activity controls to edit events and private notes.');
   const visible=visibleData(current,permissions),next={...current};
   const changed=field=>JSON.stringify(incoming[field])!==JSON.stringify(visible[field]);
   for(const [field,page] of Object.entries({name:'settings',members:'roster',gangNotes:'roster',ranks:'settings',rosterLimit:'settings',bands:'settings'})){
     if(changed(field)){if(!permits(permissions,page,'manage'))throw Error('You cannot change '+field+'.');next[field]=incoming[field];}
   }
+  const removed=current.bands.filter(b=>!next.bands.some(n=>n.id===b.id));
+  if(removed.some(b=>current.purchases.some(p=>p.lines.some(l=>l.id===b.id))||current.finance?.deposits.some(e=>e.lines.some(l=>l.id===b.id))))throw Error('A band with saved receipts cannot be deleted. Turn Active off to hide it from new deposits.');
   for(const field of ['contacts','purchases'])if(changed(field)){
     if(permits(permissions,'ledger','manage')){next[field]=incoming[field];continue;}
     if(!permits(permissions,'bands','manage'))throw Error('You cannot change the band ledger.');
