@@ -137,10 +137,10 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         const current=rawLedger(),proposal=financeRequest({route,method,body,data:current.data,revision:current.revision,permissions,actor:user,users:allUsers(),now:now()});
         if(proposal){if(proposal.nextData){db.exec('BEGIN IMMEDIATE');try{writeMembers(validateBackup(proposal.nextData),current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}return json(proposal.payload);}
       }
-      if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
+      if(route.startsWith('/api/profiles')||route.startsWith('/api/members')||(route.startsWith('/api/users/')&&method==='DELETE')){
         const current=rawLedger(),proposal=memberRequest({route,method,body,users:allUsers(),...current,permissions,actor:user});
         if(proposal){
-          if(proposal.action){db.exec('BEGIN IMMEDIATE');try{if(proposal.user)writeProfile(proposal.user);if(proposal.nextData)writeMembers(proposal.nextData,current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}
+          if(proposal.action){db.exec('BEGIN IMMEDIATE');try{if(proposal.user)writeProfile(proposal.user);if(proposal.deletedUser){for(const table of ['sessions','login_challenges','recovery_codes','account_security'])db.prepare('DELETE FROM '+table+' WHERE user_id=?').run(proposal.deletedUser);db.prepare('DELETE FROM users WHERE id=?').run(proposal.deletedUser);}if(proposal.nextData)writeMembers(proposal.nextData,current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}
           return json(proposal.payload);
         }
       }

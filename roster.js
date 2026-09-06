@@ -22,11 +22,11 @@ export function memberForm(data,member,{canEditIdentity=true,canManage=true}={})
   ${member.userId&&!canEditIdentity?'<p class="access-help">An account administrator can edit these identity details.</p>':''}
   ${pickerMarkup('member-rank','Gang rank')}
   <fieldset class="status-choices"><legend>Roster status</legend>${['active','inactive','archived'].map(status=>`<label><input type="radio" name="member-status" value="${status}" ${member.status===status?'checked':''}>${status[0].toUpperCase()+status.slice(1)}</label>`).join('')}</fieldset>
-  <p class="access-help">Archiving keeps this profile and its history. Website access is managed in Roles & access.</p>
+  <p class="access-help">Archive hides the member from the current roster and lets you restore them later. Remove from roster deletes this roster profile. Website accounts are managed under Roles & access → People.</p>
   <label for="member-joined">Date joined</label><input type="date" id="member-joined" required value="${esc(member.joined)}">
   <label for="member-notes">Notes <span class="muted">(optional)</span></label><textarea id="member-notes" rows="3" maxlength="2000">${esc(member.notes)}</textarea>
   <div class="form-error" id="member-error" role="alert"></div>
-  ${canManage?'<div class="member-actions"><button type="submit" class="button primary">Save member</button></div>':''}</form>`;
+  ${canManage?'<div class="member-actions"><button type="submit" class="button primary">Save member</button><button type="button" class="button secondary" id="remove-roster-member">Remove from roster</button></div>':''}</form>`;
 }
 export function gangSettings(data) {
   return `<form id="gang-settings-form" class="gang-settings panel settings-panel"><h2>Gang settings</h2><p>Make the roster fit your gang.</p><label for="gang-name">Website name</label><input id="gang-name" required maxlength="40" value="${esc(data.name)}"><label for="roster-limit">Roster limit</label><input id="roster-limit" type="number" min="0" max="2000" step="1" value="${data.rosterLimit}" required><small>Use 0 for no limit. Archived members do not count.</small><label for="gang-ranks">Ranks, highest first</label><textarea id="gang-ranks" rows="5" required maxlength="1230">${esc(data.ranks.join('\n'))}</textarea><small>One rank per line. Members keep their current rank if you remove it here.</small><div class="form-error" id="gang-settings-error" role="alert"></div><button class="button primary" type="submit">Save gang settings</button></form>`;

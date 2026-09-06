@@ -155,10 +155,11 @@ export async function handleCloudApi(request,env){
           const proposal=financeRequest({route,method,body,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user,users:s.users,now});
           if(proposal){if(proposal.nextData){s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(validateBackup(proposal.nextData))};audit(user.id,proposal.action);}return json(proposal.payload);}
         }
-        if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
+        if(route.startsWith('/api/profiles')||route.startsWith('/api/members')||(route.startsWith('/api/users/')&&method==='DELETE')){
           const proposal=memberRequest({route,method,body,users:s.users,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user});
           if(proposal){
             if(proposal.user)Object.assign(s.users.find(u=>u.id===proposal.user.id),proposal.user);
+            if(proposal.deletedUser){revoke(proposal.deletedUser);s.security=s.security.filter(r=>r.user_id!==proposal.deletedUser);s.recovery=s.recovery.filter(r=>r.user_id!==proposal.deletedUser);s.users=s.users.filter(u=>u.id!==proposal.deletedUser);}
             if(proposal.nextData)s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(proposal.nextData)};
             if(proposal.action)audit(user.id,proposal.action);
             return json(proposal.payload);

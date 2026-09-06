@@ -8,6 +8,14 @@ The home screen shows current, active, and inactive member counts. Invite member
 
 Settings controls the gang name, ordered rank list, and roster limit (0 means unlimited). The limit is informational, not a hard block. Gang notes hold shared reminders. Approved accounts submit their own bands; earlier ledger contacts remain separate from website accounts. Legacy backups without a roster load with an empty roster and retain their purchase history.
 
+### Removing people
+
+- **Roster → member → Remove from roster** deletes that roster profile and its notes, while keeping the website account and finance history. The approved account can be added back through Add existing account. Use **Archive** for a restorable roster profile instead.
+- **Roles & access → People → Disable sign-in temporarily** keeps the account and roster entry, revokes current sessions, and allows access to be restored later.
+- **People → Delete account** permanently removes the login, authenticator/recovery credentials, sessions, and linked roster profile after typing the exact username. The Owner and your own account cannot be deleted. Pending deposits must be settled or rejected first; paid/rejected finance records and Activity remain. Account administration is required. Deletion does not remove historical encrypted backups.
+
+Roster removal and account deletion are logged and appear on other active screens through the existing change polling. Roles such as Admin/Member control access; a person named Gang Leader is an account, not a separate role.
+
 ## Bands and gang finances
 
 **Bands → My bands** uses the signed-in account automatically. Members enter quantities at the configured band rates and an optional stash note. The server supplies the account, rates, timestamp and unpaid status. Deposits accumulate in that member's outstanding balance; saved rates do not change when Settings rates change later.

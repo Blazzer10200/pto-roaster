@@ -24,6 +24,8 @@ Two-factor is not enabled automatically on a real user's behalf. Existing local 
 
 Account-linked finances use dedicated server endpoints. Bands View permits only the signed-in account's submissions and personal history; Ledger View exposes the gang queue, and Ledger Manage permits payout/rejection and weekly-payment confirmations. Server-selected rates are frozen per deposit. A payout must match both the reviewed entry IDs and amount, and another manager must confirm their own payout. Unique request IDs and atomic commits prevent duplicate payment records. Paid/rejected entries retain actor and time; generic ledger writes cannot replace finance history.
 
+Roster removal requires Roster Manage and a current workspace revision. It does not revoke the person's website access. Account deletion requires Roles & access Manage, the exact username, and current account/workspace revisions; Owner/self deletion and deletion with pending deposits are blocked. The atomic deletion removes the user, linked roster profile, sessions, MFA challenges, authenticator record and recovery codes. Historical finance records and audit events retain their saved identities; historical backups remain unchanged.
+
 Full encrypted backups include account-linked deposits, payouts and weekly bills. The ordinary Settings JSON export covers roster and earlier ledger records; its restore preserves current account-linked finances.
 
 **Roles & access → Activity** is limited to account administrators. It displays actor, time, and account/workspace events, with pagination. Stored workspace snapshots and security details are not returned in this activity feed. This local database is not a tamper-proof external audit service.

@@ -45,7 +45,7 @@ export function attachMember(data,users,user,body,revision){
   return next;
 }
 export function assertLinkedMembers(current,next,users){
-  for(const old of current.members)if(old.userId&&!next.members.some(m=>m.id===old.id&&m.userId===old.userId))fail('Linked members must be archived, not removed or unlinked. Restore account links through member management.',403);
+  for(const old of current.members)if(old.userId&&!next.members.some(m=>m.id===old.id&&m.userId===old.userId))fail('Use Remove from roster in member management to remove a linked member.',403);
   for(const m of next.members){
     const old=current.members.find(x=>x.id===m.id);
     if(m.userId){
@@ -57,6 +57,22 @@ export function assertLinkedMembers(current,next,users){
 
 // Shared by SQLite and D1. Return a complete proposal before either backend writes.
 export function memberRequest({route,method,body,users,data,revision,permissions,actor}){
+  if(route.startsWith('/api/users/')&&method==='DELETE'){
+    if(!permits(permissions,'access','manage'))fail('Account administration permission required.',403);
+    const target=users.find(u=>u.id===route.slice('/api/users/'.length));if(!target)fail('Account not found.',404);
+    if(target.owner||target.id===actor.id)fail('The Owner and your own account cannot be deleted.',403);
+    rosterRevision(revision,body);requireRevision(target.profileRevision||0,body.profileRevision,'Account details changed. Reopen the account before deleting.');
+    if(body.username!==target.username)fail('Type the exact username to confirm deletion.');
+    if(data.finance?.deposits.some(e=>e.userId===target.id&&e.status==='pending'))fail('Settle or reject this account’s pending deposits in the finance ledger before deleting it.',409);
+    const nextData=validateBackup({...data,members:data.members.filter(m=>m.userId!==target.id)});
+    return {deletedUser:target.id,nextData,payload:{ok:true},action:'Account deleted: '+target.name+' (@'+target.username+'); linked roster removed; finance history retained'};
+  }
+  if(route.startsWith('/api/members/')&&method==='DELETE'){
+    if(!permits(permissions,'roster','manage'))fail('Roster management permission required.',403);
+    rosterRevision(revision,body);
+    const target=data.members.find(m=>m.id===route.slice('/api/members/'.length));if(!target)fail('Member not found.',404);
+    return {nextData:validateBackup({...data,members:data.members.filter(m=>m.id!==target.id)}),payload:{ok:true},action:'Removed from roster: '+target.name+'; website account and finance history retained'};
+  }
   if(route==='/api/profiles'&&method==='GET'){
     if(!permits(permissions,'roster','manage')&&!permits(permissions,'access','manage'))fail('Member management permission required.',403);
     return {payload:{users:users.filter(u=>u.approval==='approved').map(u=>({id:u.id,...profileOf(u),owner:!!u.owner,disabled:!!u.disabled,memberId:data.members.find(m=>m.userId===u.id)?.id||null})),revision}};

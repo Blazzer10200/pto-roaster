@@ -63,6 +63,8 @@ test('deployment Owner recovery is scoped, expires, revokes sessions and cannot 
  assert.equal(env.sql.prepare("SELECT count(*) AS n FROM pto_events WHERE action LIKE 'Owner password reset%'").get().n,1);
 });
 test('migrated leader signs in from Pages; unauthorized origins cannot read or preflight',async t=>{
+ const deletionPreflight=await worker.fetch(new Request(apiOrigin+'/api/users/example',{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':'DELETE'}}),{});
+ assert.equal(deletionPreflight.status,204);assert.match(deletionPreflight.headers.get('Access-Control-Allow-Methods'),/DELETE/);
  const env=await initialized(t),{token,data}=await login(env);
  assert.equal(data.user.owner,false);assert.equal(data.permissions.access,'manage');
  const loaded=await call(env,'/api/ledger',undefined,{token});assert.equal(loaded.status,200);

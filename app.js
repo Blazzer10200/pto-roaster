@@ -171,6 +171,11 @@ function editMember(id) {
   openModal(memberForm(data,member,{canManage,canEditIdentity}));
   const ranks=[...new Set([...data.ranks,member.rank])];
   mountProfilePicker($('#modal'),'member-rank',ranks.map(rank=>({id:rank,name:rank})),member.rank);
+  $('#remove-roster-member')?.addEventListener('click',()=>{
+    openModal(`<h2>Remove ${esc(member.name)} from the roster?</h2><p>This deletes their roster profile and notes. Their website account, access, and finance history remain. To stop sign-in or delete the account, use Roles & access → People.</p><p>Use Archive instead if you may want to restore this roster profile later.</p><p class="form-error" id="remove-member-error" role="alert"></p><div class="member-actions"><button class="button secondary" id="cancel-remove-member">Cancel</button><button class="button primary" id="confirm-remove-member">Remove from roster</button></div>`);
+    $('#cancel-remove-member').onclick=()=>editMember(id);
+    $('#confirm-remove-member').onclick=async()=>{const button=$('#confirm-remove-member');button.disabled=true;try{await authRequest('/api/members/'+id,{method:'DELETE',body:{revision}});$('#modal').close();await refreshSession();toast('Member removed from the roster.');}catch(error){$('#remove-member-error').textContent=error.message;}finally{button.disabled=false;}};
+  });
   $('#member-form').onsubmit=async e=>{
     e.preventDefault();if(!canManage||saving)return;
     const form=e.currentTarget,button=form.querySelector('button[type=submit]');button.disabled=true;
