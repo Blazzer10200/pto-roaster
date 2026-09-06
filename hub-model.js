@@ -40,6 +40,7 @@ export function hubRequest({route,method,body,data,revision,permissions,actor,us
       if(!roster)fail('Roster access is required.',403);const e=h.events.find(e=>e.id===body.id&&!e.cancelled);if(!e)fail('Event not found.',404);
       const target=body.userId||actor.id;if(target!==actor.id&&!manage||['attended','absent'].includes(body.response)&&!manage)fail('Roster management is required to mark attendance.',403);
       if(!users.some(u=>u.id===target&&u.approval==='approved')||!['yes','maybe','no','attended','absent'].includes(body.response))fail('Invalid attendance response.');
+      if(!manage&&['attended','absent'].includes(e.responses[target]))fail('Attendance has been recorded. Ask a roster manager to correct it.',409);
       e.responses[target]=body.response;action='Event response updated: '+e.title;
     }else if(route==='/api/hub/availability'){
       if(!roster)fail('Roster access is required.',403);const target=body.userId||actor.id;if(target!==actor.id&&!manage)fail('You can update only your own availability.',403);

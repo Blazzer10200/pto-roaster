@@ -204,6 +204,7 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} calendar permissi
  assert.equal(h.events[0].responses[0].name,'Rocco Moretti');
  assert.equal((await call('/api/hub/rsvp',{body:{id:event.id,revision:h.revision,response:'attended'}})).status,403);
  h=await ok('/api/hub/rsvp',{id:event.id,revision:h.revision,userId:'member',response:'attended'});
+ assert.equal((await call('/api/hub/rsvp',{body:{id:event.id,revision:h.revision,response:'no'}})).status,409);
  const memberId=h.members[0].id;
  h=await ok('/api/hub/notes',{memberId,revision:h.revision,note:'Private leadership only'});
  assert.equal(h.notes[memberId],'Private leadership only');
