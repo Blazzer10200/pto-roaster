@@ -49,7 +49,7 @@ function toast(message) { $('#toast').textContent=message;$('#toast').classList.
 document.addEventListener('click',dismissAccountMenu);
 document.addEventListener('keydown',dismissAccountMenu);
 document.addEventListener('focusin',dismissAccountMenu);
-function go(next) {const target=next==='purchase'?'overview':next;if(!can(target)){toast('Your role does not have access to this page.');return;}page=target;search='';filter='all';render();window.scrollTo({top:0});}
+function go(next) {const target=next==='purchase'?'overview':next;if(!can(target)){toast('Your role does not have access to this page.');return;}page=target;search='';filter='all';render();sendPresence();window.scrollTo({top:0});}
 function render() {
   if(!authSession?.authenticated||authSession.user.approval!=='approved'||authSession.security?.enrollmentRequired)return;
   const pages={roster:()=>rosterPage(data,memberSearch,memberFilter),overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage,access:()=>'<div id="access-panel"><p>Loading roles…</p></div>',requests:()=>'<div id="requests-panel"><p>Loading join requests…</p></div>'};
