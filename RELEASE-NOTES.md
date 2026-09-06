@@ -1,5 +1,13 @@
 # Workspace release — September 2026
 
+## September 6 layout correction
+
+- Dashboard and Treasury totals now size to the available width. Narrow screens use full-width cards instead of clipping large balances.
+- Finance search and date filters resize within their panels. Headings, receipt summaries, payment actions, and footer controls wrap without covering neighboring content.
+- The deposit total and Save button stay in normal form flow, so they do not float over band inputs or notes.
+- People role cards separate names from descriptions, preserve checkbox size, and space the role preset buttons. Phone pages use a single page gutter.
+- Verified all nine main pages at 320-, 768-, and 1265-pixel browser widths, plus the phone administration tabs, expanded role editor, and payment confirmation. The fixture includes a $13,202,000 balance and long event/receipt text.
+
 ## Daily use
 
 - Owner opens on a dashboard for requests, incomplete profiles, money owed, Thursday obligations, upcoming events, and personal updates. Treasurer opens on Treasury; Member opens on My stash. Pages have bookmarkable addresses and browser Back support.

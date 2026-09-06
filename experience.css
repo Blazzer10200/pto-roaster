@@ -22,4 +22,56 @@
 @media(max-width:500px){.simple-shell{padding-inline:16px}.page-heading{align-items:start;gap:12px}.stash-topline{padding-top:0}.stash-topline>div{min-width:110px}.stash-topline strong{font-size:26px}.finance-form-panel,.finance-history,.treasury-tabs+.panel{padding:16px}.band-tile{grid-template-columns:28px minmax(0,1fr) 72px;padding:12px 8px;gap:8px}.band-art{font-size:24px}.band-tile input{font-size:18px}.treasury-metrics,.home-metrics{grid-template-columns:1fr 1fr;gap:10px}.treasury-metrics>div,.home-metrics>button{padding:16px}.treasury-metrics strong,.home-metrics strong{font-size:22px}.payout-identity{flex-wrap:wrap}.payout-identity>strong{font-size:22px}.history-tools{grid-template-columns:1fr 1fr}.history-tools>label:first-child{grid-column:1/-1}.transaction-card summary{padding:12px;gap:8px}.transaction-card summary small{font-size:11px}.person-row>summary{gap:10px;padding:16px}.permission-preview{grid-template-columns:1fr}.notification-row{align-items:start}.cash-row{flex-wrap:wrap}.cash-row>.text-button{width:100%;text-align:left}.deposit-save-bar{bottom:0}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}.band-art{transform:none}}
 @media(max-width:600px){.simple-header nav.category-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px!important}.category-nav .nav-category,.category-nav .nav-category>div{display:contents}.category-nav .nav-category>span{display:none}.category-nav .simple-nav{justify-content:center;padding:8px 4px;font-size:12px;min-height:44px}.category-nav .simple-nav span{font-size:12px}.category-nav .simple-nav svg{display:none}.header-top{margin-bottom:12px}.simple-header:has(.category-nav){padding-top:12px}.simple-shell .setting-band{display:flex;flex-wrap:wrap}.setting-band input[name=bandname]{flex:1;min-width:120px}.simple-shell .setting-band .money-input{flex:1;min-width:120px}}
-.panel.finance-form-panel{overflow:visible}
+/* Shared layout boundaries: content must size to its column, not its text. */
+.simple-shell main { overflow-wrap: anywhere; }
+.simple-shell :is(.panel, .page-heading > *, .heading-actions, .stack-form > *,
+  .history-tools > *, .person-row > summary > *, .notification-row > div,
+  .payout-identity > *, .transaction-card summary > *) { min-width: 0; }
+.simple-shell :is(.button, .text-button) { max-width: 100%; white-space: normal; }
+.page-heading, .finance-section-head, .finance-person-head,
+.finance-confirm-actions, .notification-row, .payout-identity,
+.transaction-card summary, .deposit-save-bar, .simple-shell footer { flex-wrap: wrap; }
+.simple-shell footer { gap: 12px 24px; }
+.notification-row > div { flex: 1 1 180px; }
+.transaction-card summary > span:last-child { margin-left: auto; flex-shrink: 1; }
+.finance-line { flex-wrap: wrap; }
+.finance-line strong { max-width: 100%; margin-left: auto; }
+.home-metrics, .treasury-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+.home-metrics > button, .treasury-metrics > div { min-width: 0; }
+.history-tools {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+}
+.history-tools > label:first-child { grid-column: 1 / -1; }
+.history-tools label { display: grid; gap: 6px; }
+.deposit-save-bar { position: static; }
+.deposit-save-bar > div { min-width: 0; }
+.band-tile > span { min-width: 0; }
+.stash-breakdown-row { grid-template-columns: minmax(0, 1fr) minmax(48px, .45fr) minmax(80px, .7fr); }
+.stash-breakdown-row > * { min-width: 0; }
+
+/* People uses the same readable role cards as the account editor. */
+.role-presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.person-content .user-role-options { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.person-content .user-role-options .role-check {
+  padding: 12px; border: 1px solid var(--line); border-radius: 8px;
+  align-items: flex-start; cursor: pointer;
+}
+.person-content .user-role-options .role-check:has(input:checked) {
+  background: #23364b; border-color: #52789f;
+}
+.person-content .role-check small { display: block; font-weight: 400; }
+.person-content .role-check .role-color { margin-top: 5px; flex-shrink: 0; }
+.role-check input { flex-shrink: 0; width: 16px !important; height: 16px; }
+.person-content .role-check > span:last-child { min-width: 0; }
+
+@media (max-width: 600px) {
+  /* Main already supplies the page gutter; avoid doubling it on phones. */
+  .simple-shell { padding-inline: 0; }
+  .person-row > summary { flex-wrap: wrap; }
+  .person-row > summary > span:last-child { text-align: left; }
+  .simple-shell .setting-band { gap: 12px; }
+  .deposit-save-bar .button { flex: 1 1 150px; }
+  .band-tile { grid-template-columns: 28px minmax(0, 1fr) 84px; }
+}
