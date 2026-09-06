@@ -1,12 +1,18 @@
-export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'Bands'},{id:'ledger',name:'Ledger'},{id:'settings',name:'Settings'},{id:'access',name:'Roles & access'},{id:'requests',name:'Join requests'}];
+export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'My stash'},{id:'ledger',name:'Treasury'},{id:'settings',name:'Settings'},{id:'access',name:'People & roles'},{id:'requests',name:'Join requests'}];
 export const accessLevels=['none','view','manage'];
+export const treasurerRole=()=>({id:'treasurer',name:'Treasurer',color:'#d6b36a',categories:{},pages:{roster:'view',bands:'view',ledger:'manage',settings:'none',access:'none',requests:'none'}});
+export function enableFinanceRoles(config){
+  if(config.financeRolesVersion===1)return false;
+  if(!config.roles.some(r=>r.id==='treasurer'||r.name.trim().toLowerCase()==='treasurer'))config.roles.push(treasurerRole());
+  config.financeRolesVersion=1;config.revision++;return true;
+}
 export function enableMemberBands(config){
   if(config.financeAccessVersion===1)return false;
   const member=config.roles.find(r=>r.id==='member'),category=config.categories.find(c=>c.pages.includes('bands'));
   if(member&&member.pages.bands===undefined&&member.categories[category?.id]===undefined)member.pages.bands='view';
   config.financeAccessVersion=1;config.revision++;return true;
 }
-export function initialAccess(){return {revision:0,financeAccessVersion:1,categories:[{id:'gang',name:'Gang',pages:['roster']},{id:'treasury',name:'Treasury',pages:['bands','ledger']},{id:'administration',name:'Administration',pages:['settings','access','requests']}],roles:[{id:'admin',name:'Admin',color:'#78b7ff',categories:{gang:'manage',treasury:'manage',administration:'manage'},pages:{}},{id:'member',name:'Member',color:'#a0a6b0',categories:{gang:'view'},pages:{bands:'view'}}]};}
+export function initialAccess(){return {revision:0,financeAccessVersion:1,financeRolesVersion:1,categories:[{id:'gang',name:'Gang',pages:['roster']},{id:'treasury',name:'Treasury',pages:['bands','ledger']},{id:'administration',name:'Administration',pages:['settings','access','requests']}],roles:[{id:'admin',name:'Admin',color:'#78b7ff',categories:{gang:'manage',treasury:'manage',administration:'manage'},pages:{}},{id:'member',name:'Member',color:'#a0a6b0',categories:{gang:'view'},pages:{bands:'view'}},treasurerRole()]};}
 export function permissionsFor(user,config){
   const permissions=Object.fromEntries(accessPages.map(p=>[p.id,'none']));
   if(!user||user.disabled||(user.approval&&user.approval!=='approved'))return permissions;

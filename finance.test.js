@@ -6,14 +6,14 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {createDevApi} from './dev-api.mjs';
 import {stateFromSnapshot,handleCloudApi} from './cloud-api.mjs';
 import {sampleData} from './test-fixtures.js';
-import {emptyFinance,weeklyBills,validateFinance,outstanding,depositTotal,financeDay} from './finance-model.js';
-import {enableMemberBands,initialAccess} from './access-model.js';
+import {emptyFinance,weeklyBills,validateFinance,outstanding,depositTotal,financeDay,stashBreakdown} from './finance-model.js';
+import {enableMemberBands,enableFinanceRoles,initialAccess,permissionsFor} from './access-model.js';
 import {restoreSnapshot} from './backup-restore.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
 function fixture(t,hosted){
  const api=createDevApi({seed:sampleData()}),tokens={},names={owner:'Finance Owner',manager:'Finance Buddy',member:'Rocco Moretti',other:'Other Member',pending:'Waiting Member'};
  for(const [id,name] of Object.entries(names)){
-  api.db.prepare('INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,?,?,?)').run(id,name,id+'@pto.invalid',id,'ab'.repeat(16)+':'+'cd'.repeat(64),Number(id==='owner'),JSON.stringify(id==='owner'?[]:id==='manager'?['admin']:['member']),id==='pending'?'pending':'approved');
+  api.db.prepare('INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,?,?,?)').run(id,name,id+'@pto.invalid',id,'ab'.repeat(16)+':'+'cd'.repeat(64),Number(id==='owner'),JSON.stringify(id==='owner'?[]:id==='manager'?['treasurer']:['member']),id==='pending'?'pending':'approved');
   tokens[id]=randomBytes(32).toString('base64url');api.db.prepare('INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)').run(digest(tokens[id]),id,Date.now()+3600000);
  }
  api.db.prepare('INSERT INTO account_security(user_id) VALUES(?)').run('member');
@@ -124,4 +124,23 @@ test('Thursday obligations cross weeks and Central-time midnight without erasing
 test('default member self-service migration is one-time and respects explicit restrictions',()=>{
  const c=initialAccess();delete c.financeAccessVersion;delete c.roles[1].pages.bands;assert.equal(enableMemberBands(c),true);assert.equal(c.roles[1].pages.bands,'view');c.roles[1].pages.bands='none';assert.equal(enableMemberBands(c),false);assert.equal(c.roles[1].pages.bands,'none');
  delete c.financeAccessVersion;assert.equal(enableMemberBands(c),true);assert.equal(c.roles[1].pages.bands,'none');
+});
+for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} Treasurer sees member stashes while members cannot see each other or manage access`,async t=>{
+ const {call}=fixture(t,hosted),initial=(await call('/api/finance')).payload;
+ for(const [as,quantity] of [['member',2],['other',7]])assert.equal((await call('/api/finance/deposits',{as,body:{requestId:crypto.randomUUID(),ratesVersion:initial.ratesVersion,lines:[{id:'band-1',quantity}],notes:''}})).status,200);
+ const member=(await call('/api/finance')).payload,other=(await call('/api/finance',{as:'other'})).payload,treasurer=(await call('/api/finance',{as:'manager'})).payload;
+ assert.equal(member.deposits.length,1);assert.ok(member.deposits.every(e=>e.userId==='member'));assert.equal(member.canViewLedger,false);assert.deepEqual(member.bills,[]);assert.equal(stashBreakdown(member.deposits)[0].quantity,2);
+ assert.equal(stashBreakdown(other.deposits)[0].quantity,7);assert.equal(treasurer.deposits.length,2);assert.equal(stashBreakdown(treasurer.deposits)[0].quantity,9);assert.equal(treasurer.canManage,true);
+ for(const as of ['member','manager']){assert.equal((await call('/api/access',{as})).status,403);assert.equal((await call('/api/audit',{as})).status,403);}
+ const selfLedger=(await call('/api/ledger')).payload;assert.deepEqual(selfLedger.data.purchases,[]);assert.deepEqual(selfLedger.data.contacts,[]);assert.equal(selfLedger.data.finance,undefined);
+ const treasurySession=(await call('/api/session',{as:'manager'})).payload;assert.equal(treasurySession.permissions.settings,'none');assert.equal(treasurySession.permissions.requests,'none');
+});
+test('stash breakdown combines unpaid quantities using frozen rates and excludes settled entries',()=>{
+ const entries=[{status:'pending',lines:[{id:'white',name:'White',color:'#ffffff',quantity:2,price:100}]},{status:'pending',lines:[{id:'white',name:'White',color:'#ffffff',quantity:3,price:250},{id:'blue',name:'Blue',color:'#0000ff',quantity:1,price:500}]},{status:'paid',lines:[{id:'white',quantity:100,price:100}]},{status:'rejected',lines:[{id:'white',quantity:100,price:100}]}];
+ assert.deepEqual(stashBreakdown(entries).map(({id,quantity,amount})=>({id,quantity,amount})),[{id:'white',quantity:5,amount:950},{id:'blue',quantity:1,amount:500}]);
+});
+test('Treasurer preset is scoped and installed once without overwriting custom roles',()=>{
+ const config=initialAccess(),p=permissionsFor({roleIds:['treasurer']},config);assert.equal(p.ledger,'manage');assert.equal(p.bands,'view');assert.equal(p.access,'none');assert.equal(p.settings,'none');
+ delete config.financeRolesVersion;config.roles=config.roles.filter(r=>r.id!=='treasurer');assert.equal(enableFinanceRoles(config),true);assert.equal(config.roles.filter(r=>r.id==='treasurer').length,1);config.roles=config.roles.filter(r=>r.id!=='treasurer');assert.equal(enableFinanceRoles(config),false);
+ delete config.financeRolesVersion;config.roles.push({id:'custom-treasurer',name:'Treasurer',categories:{},pages:{ledger:'view'}});enableFinanceRoles(config);assert.equal(config.roles.filter(r=>r.name==='Treasurer').length,1);assert.equal(config.roles.at(-1).pages.ledger,'view');
 });

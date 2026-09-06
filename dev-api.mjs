@@ -7,7 +7,7 @@ import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
 import {financeRequest} from './finance-api.js';
-import {enableMemberBands} from './access-model.js';
+import {enableMemberBands,enableFinanceRoles} from './access-model.js';
 import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
 const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
@@ -47,6 +47,7 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
   db.prepare('INSERT OR IGNORE INTO config VALUES(1,?)').run(JSON.stringify(initialAccess()));
   const existingConfig=JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
   if(enableMemberBands(existingConfig))db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(existingConfig));
+  if(enableFinanceRoles(existingConfig))db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(existingConfig));
   if(!existingConfig.categories.some(category=>category.pages.includes('requests'))){
     const category=existingConfig.categories.find(c=>c.pages.includes('access'))||existingConfig.categories[0];category.pages.push('requests');
     // Existing custom roles do not gain review permission merely through inheritance.
@@ -197,7 +198,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         if(method==='PUT'){
           const next=validateAccess(body);if(next.revision!==config().revision)return json({error:'Access settings changed. Reload before saving.'},409);
           for(const row of db.prepare('SELECT roles FROM users').all())if(JSON.parse(row.roles).some(id=>!next.roles.some(r=>r.id===id)))throw Error('Reassign users before removing an assigned role.');
-          const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles,financeAccessVersion:1};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
+          const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles,financeAccessVersion:1,financeRolesVersion:1};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
         }
       }
       if(route==='/api/users'&&method==='POST'){

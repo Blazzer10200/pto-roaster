@@ -4,6 +4,9 @@ const validDay=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)
 export const nextThursday=day=>{const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+(4-d.getUTCDay()+7)%7);return d.toISOString().slice(0,10);};
 export const depositTotal=entry=>entry.lines.reduce((sum,line)=>sum+line.quantity*line.price,0);
 export const outstanding=entries=>entries.filter(e=>e.status==='pending').reduce((sum,e)=>sum+depositTotal(e),0);
+export function stashBreakdown(entries){
+  const bands=new Map();for(const e of entries.filter(e=>e.status==='pending'))for(const line of e.lines){const b=bands.get(line.id)||{id:line.id,name:line.name,color:line.color,quantity:0,amount:0};b.quantity+=line.quantity;b.amount+=line.quantity*line.price;bands.set(line.id,b);}return [...bands.values()];
+}
 export const emptyFinance=(now=Date.now())=>({version:1,startDate:nextThursday(financeDay(now)),deposits:[],payouts:[],bills:[]});
 export const weeklyCosts=[{id:'house',name:'Gang house',amount:500000},{id:'taxes',name:'Gang taxes',amount:500000}];
 export function weeklyBills(finance,now=Date.now()){

@@ -6,7 +6,7 @@ import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
 import {financeRequest} from './finance-api.js';
-import {enableMemberBands} from './access-model.js';
+import {enableMemberBands,enableFinanceRoles} from './access-model.js';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import QRCodeSVG from 'qrcode/lib/renderer/svg-tag.js';
 import {validateBackup} from './model.js';
@@ -85,6 +85,7 @@ export async function handleCloudApi(request,env){
       if(!row)return route==='/api/session'?json({authenticated:false,setupRequired:false,development:false}):json({error:'The website is being prepared. Please try again shortly.'},503);
       const s=JSON.parse(row.document),before=row.document,events=[];let responseToken=null,responseRemember=false;
       enableMemberBands(s.config);
+      enableFinanceRoles(s.config);
       const audit=(id,action,document=null)=>{s.auditRevision=(s.auditRevision||0)+1;events.push({at:new Date(now).toISOString(),user_id:id,action,document});};
       const findUser=login=>s.users.find(u=>u.username.toLowerCase()===login||u.email===login);
       const auth=()=>{const session=s.sessions.find(x=>x.hash===digest(tokenOf(request))&&x.expires>now),u=session&&s.users.find(u=>u.id===session.user_id&&!u.disabled);return u?{...u,mfa_verified:session.mfa_verified,remembered:!!session.remember}:null;};
@@ -195,7 +196,7 @@ export async function handleCloudApi(request,env){
         }
         if(route==='/api/access'){
           requirePage('access',method==='GET'?'view':'manage');if(method==='GET')return json({...s.config,users:s.users.map(publicUser)});
-          if(method==='PUT'){const next=validateAccess(body);if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');s.config={...next,revision:next.revision+1,financeAccessVersion:1};audit(user.id,'Roles and categories updated');return json(s.config);}
+          if(method==='PUT'){const next=validateAccess(body);if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');s.config={...next,revision:next.revision+1,financeAccessVersion:1,financeRolesVersion:1};audit(user.id,'Roles and categories updated');return json(s.config);}
         }
         if(route==='/api/users'&&method==='POST'){requirePage('access','manage');const f=fields(body);passwordValid(body.password);assertRoles(body.roleIds);const u=addUser(f,await hashPassword(body.password),body.roleIds,'approved');audit(user.id,'Account created: '+u.name);return json({ok:true},201);}
         if(route.startsWith('/api/users/')&&method==='PUT'){
