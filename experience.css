@@ -51,6 +51,81 @@
 .stash-breakdown-row { grid-template-columns: minmax(0, 1fr) minmax(48px, .45fr) minmax(80px, .7fr); }
 .stash-breakdown-row > * { min-width: 0; }
 
+/* Finance: one task per section, quiet summaries, details on demand. */
+[data-finance-mode] { --finance-surface: #252b33; }
+.finance-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.finance-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; margin: 0 0 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.treasury-tabs.finance-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.finance-nav button { display: flex; justify-content: center; align-items: center; width: 100%; min-height: 48px; margin: 0; padding: 10px 12px; font-size: 14px; line-height: 1.4; text-align: center; white-space: normal; }
+.finance-nav button.selected { background: #2b4059; color: #dcecff; }
+.finance-nav button:focus-visible, [data-finance-mode] summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.stash-topline { padding: 24px; gap: 28px 48px; background: var(--finance-surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; }
+.stash-topline > div:first-child strong { font-size: clamp(28px, 3vw, 38px); color: #e2efff; }
+.stash-topline > div:nth-child(2) strong { font-size: 24px; }
+.stash-workspace { grid-template-columns: minmax(0, 720px) minmax(220px, 1fr); gap: 40px; }
+.stash-workspace > .finance-history { grid-column: 1 / -1; }
+.finance-section-head p { margin-top: 6px; color: var(--text-soft); }
+.band-entry-heading { display: grid; grid-template-columns: minmax(0, 1fr) 184px; gap: 14px; padding: 0 0 10px 22px; color: var(--text-soft); font-size: 12px; }
+.band-entry-heading > span:last-child { text-align: center; }
+.band-entry-grid { gap: 0; }
+.band-tile { grid-template-columns: 8px minmax(0, 1fr) 184px; gap: 14px; background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 14px 0; }
+.finance-band-name { display: block; min-width: 0; margin: 0; }
+.quantity-stepper { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: stretch; min-width: 0; border: 1px solid var(--line-strong); border-radius: 8px; background: #1e2024; }
+.quantity-stepper > button { min-width: 0; min-height: 46px; border: 0; border-radius: 7px; background: transparent; color: var(--accent); font-size: 23px; line-height: 1; }
+.quantity-stepper > button:hover:not(:disabled) { background: #2b4059; }
+.quantity-stepper > button:disabled { opacity: .35; }
+.band-tile .quantity-stepper input { width: 100%; min-width: 0; min-height: 46px; padding: 8px 2px; border: 0; border-inline: 1px solid var(--line); border-radius: 0; background: transparent; text-align: center; font-size: 16px; font-variant-numeric: tabular-nums; }
+.band-marker { height: 28px; width: 5px; border-radius: 3px; background: var(--band); }
+.band-tile input { font-size: 17px; min-height: 44px; }
+.deposit-save-bar { margin-top: 20px; padding-bottom: 8px; }
+.draft-status { margin: 8px 0; }
+.finance-draft-options summary, .finance-filters > summary, .finance-band-summary > summary { cursor: pointer; color: var(--text-soft); padding: 12px 0; font-size: 13px; }
+.finance-draft-options .form-secondary-actions { padding: 4px 0; }
+.finance-filters { border-block: 1px solid var(--line); margin-bottom: 20px; }
+.finance-filters .history-tools { margin: 8px 0 20px; }
+.finance-filters .history-tools > .button { grid-column: auto; }
+.stash-guide { padding: 22px 0; }
+.stash-guide h2 { font-size: 16px; }
+.stash-guide ol { padding-left: 22px; margin: 24px 0; }
+.stash-guide li { padding: 0 0 24px 8px; color: var(--text-soft); }
+.stash-guide li::marker { color: var(--accent); font-size: 13px; }
+.stash-guide li strong { font-size: 14px; color: var(--text); }
+.stash-guide li p { font-size: 13px; margin-top: 5px; }
+.treasury-metrics > div { background: var(--finance-surface); border-color: var(--line); padding: 22px 24px; }
+.treasury-metrics > div:first-child { border-left: 3px solid var(--accent); }
+.treasury-metrics strong { font-size: clamp(24px, 2.6vw, 32px); margin: 10px 0 6px; }
+.queue-search { display: grid; gap: 6px; max-width: 440px; margin-bottom: 12px; }
+.payout-overview { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; }
+.payout-overview .payout-identity { flex: 1 1 250px; flex-wrap: nowrap; min-width: 0; }
+.payout-identity h3 { font-size: 16px; }
+.payout-amount { min-width: 0; margin-left: auto; }
+.payout-amount span { display: block; color: var(--text-soft); font-size: 12px; }
+.payout-amount strong { font: 700 24px Manrope, sans-serif; font-variant-numeric: tabular-nums; }
+.payout-note { max-width: 200px; color: var(--text-soft); font-size: 12px; }
+.payout-receipts { margin-top: 6px; }
+.payout-receipts > summary { font-size: 13px; }
+.finance-empty { text-align: center; padding: 36px 16px; }
+@media (max-width: 900px) {
+  .stash-workspace { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .stash-guide { padding: 4px 16px; }
+}
+@media (max-width: 600px) {
+  .stash-topline { padding: 18px; gap: 22px; }
+  .stash-topline > div { min-width: 0; }
+  .stash-topline p { flex-basis: 100%; }
+  .finance-nav { gap: 4px; }
+  .finance-nav button { padding-inline: 6px; font-size: 12px; }
+  .treasury-tabs.finance-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .payout-overview { gap: 12px; }
+  .payout-overview .payout-identity { flex-basis: 100%; }
+  .payout-amount { margin-left: 0; flex: 1 1 120px; }
+  .treasury-metrics { grid-template-columns: minmax(0, 1fr); gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .treasury-metrics > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; border: 0; border-radius: 0; padding: 14px 16px; }
+  .treasury-metrics > div + div { border-top: 1px solid var(--line); }
+  .treasury-metrics strong { font-size: 20px; margin: 0; }
+  .treasury-metrics small { grid-column: 1 / -1; }
+}
+
 /* People uses the same readable role cards as the account editor. */
 .role-presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .person-content .user-role-options { display: grid; grid-template-columns: 1fr; gap: 10px; }
@@ -66,6 +141,21 @@
 .role-check input { flex-shrink: 0; width: 16px !important; height: 16px; }
 .person-content .role-check > span:last-child { min-width: 0; }
 
+/* Separate profile editing, access changes, and account removal. */
+.people-toolbar { align-items: end; gap: 16px; }
+.people-toolbar > label { display: grid; gap: 8px; margin: 0; min-width: 0; }
+.people-toolbar > label:first-child { flex: 1 1 240px; }
+.people-toolbar input, .people-toolbar select { width: 100%; min-width: 0; }
+.person-content > .account-profile { margin-bottom: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.person-content [data-user-form] > h3 { margin-bottom: 8px; }
+.person-content [data-user-form] > .permission-preview { margin-block: 20px; }
+.person-content > .account-actions { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line-strong); }
+.person-content > .account-actions > summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-size: 13px; line-height: 1.6; }
+.person-content [data-delete-user] { display: grid; justify-items: start; gap: 20px; padding: 16px 0 8px; }
+.person-content [data-delete-user] > label { display: grid; gap: 8px; margin: 0; width: 100%; max-width: 440px; }
+.person-content [data-delete-user] input { width: 100%; }
+#people-results { margin-top: 16px; }
+
 @media (max-width: 600px) {
   /* Main already supplies the page gutter; avoid doubling it on phones. */
   .simple-shell { padding-inline: 0; }
@@ -73,5 +163,8 @@
   .person-row > summary > span:last-child { text-align: left; }
   .simple-shell .setting-band { gap: 12px; }
   .deposit-save-bar .button { flex: 1 1 150px; }
-  .band-tile { grid-template-columns: 28px minmax(0, 1fr) 84px; }
+  .band-tile { grid-template-columns: 8px minmax(0, 1fr); gap: 10px 14px; }
+  .quantity-stepper { grid-column: 2; }
+  .band-entry-heading { grid-template-columns: 1fr; }
+  .band-entry-heading > span:last-child { display: none; }
 }

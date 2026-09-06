@@ -1,5 +1,13 @@
 # Workspace release — September 2026
 
+## September 6 finance simplification
+
+- My stash separates Add bands, Unpaid deposits, and History. Equal-width section buttons and consistent band rows make navigation and entry easier to scan.
+- Band quantities support minus/plus buttons as well as direct typing. Controls respect quantity limits and update the deposit total and device draft immediately.
+- Treasury opens with compact member payouts and clearly separates member balances, bills due now, and recorded gang cash. Deposit details, receipt filters, and past bill payments expand when needed.
+- People profile editing, access changes, and account removal have distinct spacing. Saving roles and opening account deletion are separated by a divider; the deletion form and search fields have consistent gaps.
+- Desktop and phone previews cover equal tab and row sizing, quantity controls and limits, saved drafts, partial payments, filters, and account-action spacing.
+
 ## September 6 layout correction
 
 - Dashboard and Treasury totals now size to the available width. Narrow screens use full-width cards instead of clipping large balances.
@@ -11,8 +19,8 @@
 ## Daily use
 
 - Owner opens on a dashboard for requests, incomplete profiles, money owed, Thursday obligations, upcoming events, and personal updates. Treasurer opens on Treasury; Member opens on My stash. Pages have bookmarkable addresses and browser Back support.
-- My stash puts account-linked band entry beside receipts, with color-coded band tiles and a running total. Quantities and notes save as a private device draft for 24 hours. Navigation and reload restore that draft; submitting, discarding, or signing out clears it. Drafts are not submitted deposits and do not sync between devices.
-- Treasury separates Payouts, Transactions, Weekly bills, Cashbook, and Owner finance settings. Members receive only their own financial records. Treasury viewers can see all balances; managers can record payments. Owner can confirm their own payout; other managers still need another finance manager for their own payout.
+- My stash separates band entry from unpaid deposits and history, with band-color markers, quantity buttons, and a running total. Quantities and notes save as a private device draft for 24 hours. Navigation and reload restore that draft; submitting, discarding, or signing out clears it. Drafts are not submitted deposits and do not sync between devices.
+- Treasury separates Pay members, Weekly bills, Deposit history, and Gang cash, with Owner finance settings in the heading. Members receive only their own financial records. Treasury viewers can see all balances; managers can record payments. Owner can confirm their own payout; other managers still need another finance manager for their own payout.
 - Full and partial payments apply to the oldest outstanding deposits. A partial payment reduces money owed without inventing a conversion between cash and individual band quantities. The band counts show original contents of still-unpaid deposits.
 - Members can withdraw an unpaid deposit and reuse its quantities in a corrected draft. Managers can reject incorrect deposits with a reason. Partly paid deposits require the Owner to reverse their payment before withdrawal or rejection.
 - Owner corrections create an attributed reversal, preserve the original receipt, reopen the affected balance, and adjust linked cashbook entries. Nothing silently erases paid history.
