@@ -32,6 +32,8 @@ The server creates at most one encrypted daily snapshot under `.local/backups/` 
 
 ## Hosted operation
 
+An operator can recover an existing Owner password through the private `PTO_OWNER_PASSWORD_RESET` deployment setting. It targets the exact Owner ID, username, and previous password digest, expires within an hour, revokes the Owner's old sessions, and records an audit event. It never accepts reset instructions from HTTP input and cannot replay after the password changes. Clear the setting to an empty value and redeploy after a verified reset.
+
 - The Worker stores account/workspace state in D1 using an atomic revision comparison. Competing mutations rerun against current permissions before committing; state, audit records and the daily encrypted snapshot commit together. Per-account and Cloudflare client-IP limits are shared in D1. The document is capped at 1.4 MB; normalize storage before approaching this limit.
 - `PTO_SECURITY_KEY` is a private runtime secret. The one-time `/api/operator/migrate` route additionally requires `PTO_MIGRATION_TOKEN` and rejects all imports after initialization. The public cannot claim the Owner account. Remove the migration secret after the verified import.
 - Legacy hosted ledger tables remain preserved for operator recovery and are no longer exposed through the API. Hosted daily snapshots are encrypted, chunked in D1, and created on the first state change each UTC day; they are not an independent off-provider backup. Download a passphrase-protected full backup to a separate location.

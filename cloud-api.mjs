@@ -1,6 +1,8 @@
 import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'node:crypto';
 import {Buffer} from 'node:buffer';
 import {promisify} from 'node:util';
+import {applyOwnerPasswordReset} from './owner-password-reset.mjs';
+import {onlineUsers} from './presence.js';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import QRCodeSVG from 'qrcode/lib/renderer/svg-tag.js';
 import {validateBackup} from './model.js';
@@ -48,6 +50,7 @@ export async function handleCloudApi(request,env){
   const first=(sql,...args)=>db.prepare(sql).bind(...args).first(),all=async(sql,...args)=>(await db.prepare(sql).bind(...args).all()).results;
   const stmt=(sql,...args)=>db.prepare(sql).bind(...args);
   try{
+    await applyOwnerPasswordReset(db,env.PTO_OWNER_PASSWORD_RESET);
     const origin=request.headers.get('origin');
     if(origin&&!allowedOrigin(request))fail('Use PTO Roaster to make this request.',403);
     if(!['GET','HEAD'].includes(method)&&(!allowedOrigin(request)||request.headers.get('x-bandbook-request')!=='1'))fail('Use PTO Roaster to make this change.',403);
@@ -58,7 +61,7 @@ export async function handleCloudApi(request,env){
       const r=await first('INSERT INTO pto_limits(key,count,expires) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN expires<=? THEN 1 ELSE count+1 END, expires=CASE WHEN expires<=? THEN excluded.expires ELSE expires END RETURNING count',digest(bucket),now+600000,now,now);
       if(r.count>max)fail('Too many attempts. Wait a few minutes before trying again.',429);
     }
-    if(method!=='GET')await limit('ip:'+source,120);
+    if(method!=='GET'&&route!=='/api/presence')await limit('ip:'+source,120);
     if(route==='/api/operator/migrate'&&method==='POST'){
       // Deployment-only capability: secret-authenticated and permanently closed after first import.
       const supplied=digest(request.headers.get('x-pto-migration')||'');
@@ -143,6 +146,14 @@ export async function handleCloudApi(request,env){
         if(enabled(user.id)&&!user.mfa_verified)return json({error:'Sign in again with your authenticator.',reauthenticate:true},401);
         if(user.approval!=='approved')fail(user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.',403);
         const perms=permissions(user),requirePage=(p,l='view')=>{if(!permits(perms,p,l))fail('Your role does not have permission for this page.',403);};
+        if(route==='/api/presence'){
+          if(method==='GET'){requirePage('access','manage');return json({users:onlineUsers(s.sessions,s.users,now)});}
+          if(method==='POST'){
+            await limit('presence:'+user.id,60);
+            if(!accessPages.some(p=>p.id===body.page)||!permits(perms,body.page))fail('Choose an accessible page.',403);
+            const current=s.sessions.find(r=>r.hash===digest(tokenOf(request)));current.last_seen=now;current.page=body.page;return json({ok:true});
+          }
+        }
         if(route==='/api/security/backup-status'&&method==='GET'){if(!user.owner)fail('Only the Owner can view full backup status.',403);const r=await first('SELECT day FROM pto_backups ORDER BY day DESC LIMIT 1');return json({enabled:true,savedAt:r?.day?new Date(r.day).toISOString():null,hosted:true});}
         if(route==='/api/security/backup'&&method==='POST'){if(!user.owner)fail('Only the Owner can export a full security backup.',403);await reauthenticate();audit(user.id,'Encrypted full backup downloaded');return json(await encryptBackup(await snapshot(),body.passphrase));}
         if(route==='/api/audit'&&method==='GET'){

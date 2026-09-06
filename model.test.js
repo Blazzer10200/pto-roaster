@@ -1,29 +1,30 @@
+import {sampleData} from './test-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {freshData,total,paid,balance,addPayment,validatePurchase,validateBackup,cents,contactBalance,payContact} from './model.js';
 test('sample data is valid and personal ledger has no invented prices or records',()=>{
-  const demo=validateBackup(freshData(true)),own=validateBackup(freshData());
+  const demo=validateBackup(sampleData()),own=validateBackup(freshData());
   assert.equal(demo.purchases.length,6);assert.equal(own.purchases.length,0);assert.equal(own.contacts.length,0);assert.ok(own.bands.every(b=>b.price===0));
 });
 test('partial payments reduce balance, a final payment settles, and overpayments fail',()=>{
-  const p=freshData(true).purchases[0];assert.equal(total(p),1200000);assert.equal(paid(p),600000);assert.equal(balance(p),600000);
+  const p=sampleData().purchases[0];assert.equal(total(p),1200000);assert.equal(paid(p),600000);assert.equal(balance(p),600000);
   const partial=addPayment(p,100000,new Date().toISOString(),'one');assert.equal(balance(partial),500000);assert.equal(p.payments.length,1);
   assert.equal(balance(addPayment(partial,500000,new Date().toISOString(),'two')),0);
   assert.throws(()=>addPayment(partial,500001,new Date().toISOString(),'bad'));assert.throws(()=>addPayment(p,-100,new Date().toISOString(),'negative'));
 });
-test('saved purchases keep prices when defaults change',()=>{const d=freshData(true),before=total(d.purchases[0]);d.bands[2].price=1;assert.equal(total(d.purchases[0]),before);});
+test('saved purchases keep prices when defaults change',()=>{const d=sampleData(),before=total(d.purchases[0]);d.bands[2].price=1;assert.equal(total(d.purchases[0]),before);});
 test('integer cents avoid decimal totals and invalid quantities or payments are rejected',()=>{
-  const p={...freshData(true).purchases[0],lines:[{name:'Band',quantity:3,price:cents('0.10')}],payments:[]};assert.equal(total(validatePurchase(p)),30);
+  const p={...sampleData().purchases[0],lines:[{name:'Band',quantity:3,price:cents('0.10')}],payments:[]};assert.equal(total(validatePurchase(p)),30);
   assert.throws(()=>validatePurchase({...p,lines:[{quantity:1.5,price:100}]}));assert.throws(()=>validatePurchase({...p,payments:[{amount:31}]}));assert.throws(()=>validatePurchase({...p,lines:[]}));
 });
 test('backup round trip preserves payment history; corrupt and orphan records are rejected',()=>{
-  const d=freshData(true);assert.deepEqual(validateBackup(JSON.parse(JSON.stringify(d))),d);
+  const d=sampleData();assert.deepEqual(validateBackup(JSON.parse(JSON.stringify(d))),d);
   assert.throws(()=>validateBackup({...d,contacts:[]}));assert.throws(()=>validateBackup({...d,version:2}));
   const bad=structuredClone(d);bad.bands[0].color='url(https://example.com)';assert.throws(()=>validateBackup(bad));
   const duplicate=structuredClone(d);duplicate.contacts.push(duplicate.contacts[0]);assert.throws(()=>validateBackup(duplicate));
 });
 test('unpaid mixed-band drop-offs accrue a contact balance and retain their rates',()=>{
-  const data=freshData(true);
+  const data=sampleData();
   const dropoff=validatePurchase({id:'drop-1',kind:'dropoff',contactId:'c1',date:new Date().toISOString(),notes:'Left for later payment',lines:[{...data.bands[1],quantity:20},{...data.bands[3],quantity:5}],payments:[]});
   const previous=contactBalance(data.purchases,'c1');
   data.purchases.push(dropoff);

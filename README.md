@@ -13,6 +13,7 @@ Settings controls the gang name, ordered rank list, and roster limit (0 means un
 ### Development login and permissions
 
 The account security panel now provides authenticator enrollment, recovery codes, session revocation, and an Owner-controlled admin MFA requirement. Roles & access includes Activity and encrypted full Backups. See [SECURITY.md](./SECURITY.md) for setup, recovery, backup restoration, and the remaining hosted deployment requirements.
+Admins can open **Roles & access → Online** to see approved users active in the last two minutes and their current page. Visible tabs check in every 45 seconds; the list refreshes every 15 seconds. Closed or hidden tabs age out, and signed-out sessions disappear immediately. Ordinary members cannot read this list.
 
 The local server uses a separate SQLite database at `.local/pto-dev.sqlite` (ignored by Git). Open the preview and create the first Owner account; no default password is provided. The Owner has permanent full access. After setup, the login page offers **Create account** with a username, password, and in-character roleplay name. Self-registration always creates a pending account with no roles or workspace access. The applicant sees **Awaiting approval** until an authorized reviewer approves or declines the request. Owners/access managers can also create approved accounts and assign multiple roles in **Roles & access**. Existing accounts and passwords are preserved; their old email login still works alongside their derived username. Passwords use salted scrypt hashes; session tokens are random, hashed in storage, and delivered through HttpOnly/SameSite cookies. The server binds only to loopback. Recovery codes provide account recovery; no email-based reset service or Discord OAuth is connected.
 
@@ -32,7 +33,7 @@ Open http://127.0.0.1:4173. Run `npm test` for the ledger calculation and backup
 
 ## First preview
 
-A new local database starts with sample roster and ledger records behind the Owner setup screen. Existing databases retain their accounts and records. Set actual prices in Settings. The previously published site uses its separate online data.
+New workspaces start with an empty roster, no player accounts or transactions, blank gang notes, and unset band prices. Set actual prices in Settings. Test fixtures are separate modules excluded from published assets. Existing login accounts and permissions remain intact.
 
 Features:
 - Drop-off entries: receive a player's bands now, leave the amount paid at zero, and track the full amount owed to that player.

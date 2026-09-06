@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.mjs",
     "test": "node --test",
-    "check": "node --check app.js && node --check roster.js && node --check model.js && node --check player-picker.js && node --check cloud.js && node --check worker.js && node --check cloud-api.mjs && node --check api-config.js && node --check auth-ui.js && node --check ui-shell.js && node --check access-model.js && node --check dev-api.mjs && node --check server.mjs && node --check security-ui.js && node --check security-store.mjs && node --check security-crypto.mjs && node --check local-security.mjs && node --check backup-restore.mjs && node --check restore-backup.mjs",
+    "check": "node --check app.js && node --check roster.js && node --check model.js && node --check player-picker.js && node --check cloud.js && node --check worker.js && node --check cloud-api.mjs && node --check owner-password-reset.mjs && node --check presence.js && node --check presence-ui.js && node --check api-config.js && node --check auth-ui.js && node --check ui-shell.js && node --check access-model.js && node --check dev-api.mjs && node --check server.mjs && node --check security-ui.js && node --check security-store.mjs && node --check security-crypto.mjs && node --check local-security.mjs && node --check backup-restore.mjs && node --check restore-backup.mjs",
     "build": "node build.mjs",
     "build:pages": "node build-pages.mjs",
     "db:generate": "drizzle-kit generate"

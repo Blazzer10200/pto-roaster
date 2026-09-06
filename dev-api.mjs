@@ -3,6 +3,7 @@ import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'n
 import {promisify} from 'node:util';
 import {createSecurity,securitySchema} from './security-store.mjs';
 import {freshData,validateBackup} from './model.js';
+import {onlineUsers} from './presence.js';
 import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
 const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
@@ -17,7 +18,7 @@ function accountFields(body){
   if(!name||name.length>60||!username||!/^[a-z0-9_.-]{3,32}$/.test(username))throw Error('Enter your in-character name and a username of 3–32 letters, numbers, dots, underscores, or hyphens.');
   return {name,username,email:legacyEmail||crypto.randomUUID()+'@pto.invalid'};
 }
-export function createDevApi({file=':memory:',seed=freshData(true),key,now=Date.now,backupStatus=()=>({enabled:false})}={}){
+export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,backupStatus=()=>({enabled:false})}={}){
   if(!key&&file!==':memory:')throw Error('A persistent encryption key is required for this database.');
   key=key||randomBytes(32);
   const db=new DatabaseSync(file);
@@ -25,6 +26,7 @@ export function createDevApi({file=':memory:',seed=freshData(true),key,now=Date.
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,owner INTEGER NOT NULL DEFAULT 0,disabled INTEGER NOT NULL DEFAULT 0,roles TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS one_owner ON users(owner) WHERE owner=1;
     CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS presence(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,last_seen INTEGER NOT NULL,page TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY,document TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS workspace(id INTEGER PRIMARY KEY,revision INTEGER NOT NULL,document TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,user_id TEXT NOT NULL,action TEXT NOT NULL,document TEXT);`);
@@ -120,6 +122,19 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
         db.prepare('UPDATE users SET password=? WHERE id=?').run(password,user.id);security.revoke(user.id);audit(user.id,'Password changed');return newSession(user,security.enabled(user.id));
       }
       if(user.approval!=='approved')return json({error:user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.'},403);
+      if(route==='/api/presence'){
+        if(method==='GET'){
+          if(!permits(permissions,'access','manage'))return json({error:'Account administration permission required.'},403);
+          const sessions=db.prepare('SELECT sessions.user_id,sessions.expires,presence.last_seen,presence.page FROM presence JOIN sessions ON sessions.hash=presence.session_hash').all();
+          return json({users:onlineUsers(sessions,db.prepare('SELECT * FROM users').all(),now())});
+        }
+        if(method==='POST'){
+          security.limit('presence:'+user.id,60);
+          if(!accessPages.some(p=>p.id===body.page)||!permits(permissions,body.page))return json({error:'Choose an accessible page.'},403);
+          db.prepare('INSERT INTO presence VALUES(?,?,?) ON CONFLICT(session_hash) DO UPDATE SET last_seen=excluded.last_seen,page=excluded.page').run(digest(cookieToken(request)),now(),body.page);
+          return json({ok:true});
+        }
+      }
       if(route==='/api/requests'&&method==='GET'){
         if(!permits(permissions,'requests'))return json({error:'Join request access required.'},403);
         const assignableRoles=config().roles.filter(role=>{const grants=permissionsFor({roleIds:[role.id]},config());return accessPages.every(page=>accessLevels.indexOf(grants[page.id])<=accessLevels.indexOf(permissions[page.id]));});

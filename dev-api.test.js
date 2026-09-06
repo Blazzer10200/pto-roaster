@@ -1,10 +1,18 @@
+import {sampleData} from './test-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createDevApi} from './dev-api.mjs';
+
+test('new workspaces start empty with no example rates or notes',()=>{
+  const api=createDevApi();try{const data=JSON.parse(api.snapshot().tables.workspace[0].document);
+    assert.deepEqual(data.members,[]);assert.deepEqual(data.contacts,[]);assert.deepEqual(data.purchases,[]);
+    assert.ok(data.bands.every(b=>b.price===0));assert.equal(data.gangNotes,'');assert.equal(data.rosterLimit,0);
+  }finally{api.close();}
+});
 const origin='http://127.0.0.1:4173',password='Development-Test-Password-123';
 const request=(path,method='GET',body,cookie='',otherOrigin=origin)=>new Request(origin+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body?{'Content-Type':'application/json',Origin:otherOrigin,'X-Bandbook-Request':'1'}:{})},...(body?{body:JSON.stringify(body)}:{})});
 const token=response=>response.headers.get('set-cookie').split(';')[0];
-async function ownerFixture(t){const api=createDevApi();t.after(()=>api.close());const setup=await api.handle(request('/api/auth/setup','POST',{name:'Test Owner',email:'owner@example.test',password}));assert.equal(setup.status,200);return {api,ownerCookie:token(setup)};}
+async function ownerFixture(t){const api=createDevApi({seed:sampleData()});t.after(()=>api.close());const setup=await api.handle(request('/api/auth/setup','POST',{name:'Test Owner',email:'owner@example.test',password}));assert.equal(setup.status,200);return {api,ownerCookie:token(setup)};}
 async function addMember(api,ownerCookie){const response=await api.handle(request('/api/users','POST',{name:'Test Member',email:'member@example.test',password,roleIds:['member']},ownerCookie));assert.equal(response.status,201);const login=await api.handle(request('/api/auth/login','POST',{email:'member@example.test',password}));assert.equal(login.status,200);return token(login);}
 test('first Owner setup is single-use, passwords are hashed, and sessions are HttpOnly',async t=>{
   const {api,ownerCookie}=await ownerFixture(t);

@@ -12,15 +12,12 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const money = value => '$' + (value / 100).toLocaleString('en-US', {maximumFractionDigits:2});
 const uid = () => crypto.randomUUID();
 const icon = (name, size=20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${({grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',plus:'<path d="M12 5v14M5 12h14"/>',people:'<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 4v2"/>',history:'<path d="M3 10a9 9 0 1 1 1 7M3 4v6h6M12 7v5l3 2"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--panel)"/><circle cx="15" cy="17" r="3" fill="var(--panel)"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',down:'<path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/>',wallet:'<path d="M20 7H5a2 2 0 0 1 0-4h13v4M3 5v14a2 2 0 0 0 2 2h15V7M20 12h-5v5h5"/>',box:'<path d="m12 3 9 5v9l-9 5-9-5V8l9-5ZM3 8l9 5 9-5M12 13v9M7.5 5.5l9 5"/>',check:'<path d="m5 12 4 4L19 6"/>',search:'<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',close:'<path d="m6 6 12 12M18 6 6 18"/>',chevron:'<path d="m9 5 7 7-7 7"/>',coin:'<circle cx="12" cy="12" r="9"/><path d="M15 8H10a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H9M12 6v12"/>',moon:'<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>'})[name] || ''}</svg>`;
-let mode, data, loadError = '', cloud=null, saving=false, authSession=null;
+let data=freshData(), loadError = '', cloud=null, saving=false, authSession=null;
 const permissionPage=id=>({overview:'bands',history:'ledger',contacts:'ledger'}[id]||id);
 const can=(id,level='view')=>permits(authSession?.permissions,permissionPage(id),level);
 const storageLabel=()=>authSession?.development?'Saved locally':'Saved online';
-try { mode = localStorage.getItem('bandbook-mode') || 'demo'; const raw=localStorage.getItem('bandbook-'+mode); data=raw ? validateBackup(JSON.parse(raw)) : freshData(mode==='demo'); }
-catch { mode='demo';data=freshData(true);loadError='Saved data could not be loaded. The original storage has been left untouched. Export or recover it before saving new changes.'; }
 let memberFilter='current', memberSearch='';
 let page='roster', filter='all', search='', draft={}, draftContact='', draftNotes='', draftPaid='';
-const key = () => 'bandbook-'+mode;
 async function commit(next) {
   if (saving) return false;
   if (loadError) { toast(loadError); return false; }
@@ -30,7 +27,7 @@ async function commit(next) {
   try {
     next=validateBackup(next);
     if(cloud) data=validateBackup(await cloud.save(next));
-    else {localStorage.setItem(key(),JSON.stringify(next));data=next;}
+    else throw Error('Sign in before saving records.');
     if ($('#connection-status')) $('#connection-status').textContent=cloud?storageLabel():'Saved in this browser';
     return true;
   } catch(error) {
@@ -114,14 +111,8 @@ function contactsPage() {
   return title('','Player balances','Band accounts for members and other players.',`<button class="button secondary" data-page="history">Ledger</button><button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
 }
 function bandSetting(b){return `<div class="setting-band" data-setting-band="${esc(b.id)}"><input type="color" name="color" value="${b.color}" aria-label="Band color"><input name="bandname" aria-label="Band name" value="${esc(b.name)}" maxlength="40" required><label class="money-input"><span>$</span><input name="price" aria-label="Default unit price" value="${b.price/100}" type="number" min="0" max="1000000000" step="0.01" required></label><label class="toggle-label"><input type="checkbox" name="active" ${b.active?'checked':''}> Active</label><button type="button" class="icon-button" data-move="up" aria-label="Move band up">↑</button><button type="button" class="icon-button" data-move="down" aria-label="Move band down">↓</button></div>`;}
-function legacyWorkspace(){
-  try{const oldMode=localStorage.getItem('bandbook-mode')||'demo';const raw=localStorage.getItem('bandbook-'+oldMode);return raw?validateBackup(JSON.parse(raw)):null;}catch{return null;}
-}
-function legacyImportPanel(){
-  return authSession?.user.owner&&legacyWorkspace()?'<section class="panel settings-panel backup-panel"><div><h2>Previous browser workspace</h2><p>Your earlier records are still saved in this browser. Import them into the protected local workspace.</p></div><button class="button secondary" data-action="import-legacy">Import previous records</button></section>':'';
-}
 function settingsPage() {
-  return title('','Settings','Manage your roster, band prices, and backups.')+gangSettings(data)+legacyImportPanel()+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>${cloud?'Records save to this workspace. This download contains only the records you can access; full account backups are under Roles & access.':'Records save in this browser. Download a copy to keep them safe.'}</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Download backup</button><button class="button secondary" data-action="import">Restore backup</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section><div class="simple-storage">${cloud?`<p>Local protected workspace · Access is controlled by your roles.</p>`:`<p>Local preview · Data is saved only in this browser.</p><button class="text-button" data-action="switch">${mode==='demo'?'Start my ledger':'Try sample data'}</button>`}</div>`;
+  return title('','Settings','Manage your roster, band prices, and backups.')+gangSettings(data)+`<form id="settings-form" class="simple-settings"><section class="panel settings-panel"><div class="panel-header"><div><h2>Bands & prices</h2><p>Changes apply to new entries only.</p></div><button type="button" class="button secondary" data-action="add-band">${icon('plus',16)} Add band</button></div><div class="settings-band-head"><span>COLOR & NAME</span><span>PRICE EACH</span><span>VISIBLE / ORDER</span></div><div id="band-settings">${data.bands.map(bandSetting).join('')}</div><div class="form-error" id="settings-error" role="alert"></div><button class="button primary" type="submit">${icon('check',17)} Save settings</button></section></form><section class="panel settings-panel backup-panel"><div><h2>Backup</h2><p>Records save to this workspace. This download contains only the records you can access; full account backups are under Roles & access.</p></div><div class="backup-actions"><button class="button secondary" data-action="export">${icon('down',16)} Download backup</button><button class="button secondary" data-action="import">Restore backup</button><input id="backup-file" type="file" accept="application/json,.json" hidden></div></section>`;
 }
 function updateCalculator() {
   if (!$('#purchase-form')) return;
@@ -157,7 +148,7 @@ function bindForms(){
   $('#history-search')?.addEventListener('input',e=>{search=e.target.value;$('#history-results').innerHTML=table(filteredPurchases());});
   $('#contact-search')?.addEventListener('input',e=>{search=e.target.value;$('#contact-results').innerHTML=contactCards();});
   $('#settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const bands=[...document.querySelectorAll('[data-setting-band]')].map(row=>({id:row.dataset.settingBand,name:row.querySelector('[name=bandname]').value.trim(),color:row.querySelector('[name=color]').value,price:cents(row.querySelector('[name=price]').value),active:row.querySelector('[name=active]').checked}));const next={...data,bands};try{validateBackup(next);if(await commit(next)){clearDraft();render();toast('Settings saved. Your new rates are ready.');}}catch(error){$('#settings-error').textContent=error.message;}});
-  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the ${mode==='demo'?'demo':'current'} ledger with <strong>${next.members.length} members, ${next.contacts.length} band accounts, and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
+  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the current ledger with <strong>${next.members.length} members, ${next.contacts.length} band accounts, and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
 }
 function openModal(html){$('#modal').innerHTML=`<button class="modal-close icon-button" data-action="close" aria-label="Close dialog">${icon('close')}</button>${html}`;if(!$('#modal').open)$('#modal').showModal();queueMicrotask(restrictModal);}
 function editMember(id) {
@@ -215,12 +206,6 @@ document.addEventListener('click',async e=>{
     case 'reset-roster':memberSearch='';memberFilter='current';render();$('#roster-search')?.focus();break;
     case 'reset-history':search='';filter='all';render();$('#history-search')?.focus();break;
     case 'reset-contacts':search='';render();$('#contact-search')?.focus();break;
-    case 'import-legacy':{
-      if(!authSession.user.owner)break;
-      const previous=legacyWorkspace();if(!previous){toast('No previous browser records found.');break;}
-      openModal(`<h2>Import previous records?</h2><p>This replaces the development roster and ledger with ${previous.members.length} members and ${previous.purchases.length} band entries from this browser. Accounts and roles stay as they are.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-legacy">Import records</button></div>`);
-      $('#confirm-legacy').onclick=async()=>{if(await commit(previous)){$('#modal').close();render();toast('Previous records imported. The original browser copy was kept.');}};break;
-    }
     case 'account':accountDialog(authSession.user,openModal,refreshSession);break;
     case 'logout':await authRequest('/api/auth/logout',{method:'POST',body:{}});$('#modal').close();authSession=null;cloud=null;clearDraft();await start();break;
     case 'close':$('#modal').close();break;
@@ -230,22 +215,28 @@ document.addEventListener('click',async e=>{
     case 'pay-full':draftPaid=String(updateCalculator()/100);$('#amount-paid').value=draftPaid;updateCalculator();break;
     case 'add-band':$('#band-settings').insertAdjacentHTML('beforeend',bandSetting({id:uid(),name:'New band',color:'#b9d984',price:0,active:true}));break;
     case 'reload':location.reload();break;
-    case 'switch':{if(cloud)break;const nextMode=mode==='demo'?'personal':'demo';try{const raw=localStorage.getItem('bandbook-'+nextMode);const next=raw?validateBackup(JSON.parse(raw)):freshData(nextMode==='demo');localStorage.setItem('bandbook-mode',nextMode);mode=nextMode;data=next;loadError='';clearDraft();go(mode==='personal'?'settings':'overview');toast(mode==='personal'?'Your own ledger is ready. Set your band prices to get started.':'You’re exploring the demo. Your own ledger is kept separately.');}catch(error){toast('Could not switch workspace: '+error.message);}break;}
-    case 'export':{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`pto-roaster-${mode}-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup downloaded. Keep it somewhere safe.');break;}
+    case 'export':{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`pto-roaster-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup downloaded. Keep it somewhere safe.');break;}
     case 'import':$('#backup-file').click();break;
   }
 });
 $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('#modal').close();}});
-window.addEventListener('storage',e=>{if(!cloud&&(e.key===key()||e.key==='bandbook-mode')){loadError='This ledger changed in another tab. Reload this page before saving to avoid overwriting those changes.';render();}});
 
 async function openWorkspace(session){
   authSession=session;
   if(!session.authenticated){cloud=null;loginScreen(session,openWorkspace);return;}
   if(session.user.approval!=='approved'){cloud=null;approvalScreen(session,openWorkspace);return;}
   if(session.security?.enrollmentRequired){cloud=null;securityGate(session,openWorkspace,authRequest);return;}
-  cloud=new CloudLedger();mode='development';loadError='';
+  cloud=new CloudLedger();loadError='';
   data=validateBackup(await cloud.load());clearDraft();render();
+  sendPresence();
 }
+let presenceBusy=false;
+async function sendPresence(){
+  if(presenceBusy||document.visibilityState!=='visible'||!cloud||!authSession?.authenticated||authSession.user.approval!=='approved'||!can(page))return;
+  presenceBusy=true;try{await authRequest('/api/presence',{method:'POST',body:{page:permissionPage(page)}});}catch{}finally{presenceBusy=false;}
+}
+setInterval(sendPresence,45000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sendPresence();});
 async function pollSession(){
   if(!authSession?.authenticated||saving||document.querySelector('[data-security-sensitive]'))return;
   try{
@@ -263,7 +254,7 @@ async function start() {
     if(!session.authenticated){loginScreen(session,openWorkspace);return;}
     await openWorkspace(session);
   }catch {
-    $('#app').innerHTML='<div class="startup"><h1>Unable to open the workspace</h1><p>Check that the development server is running, then try again.</p><button class="button primary" data-action="reload">Try again</button></div>';
+    $('#app').innerHTML='<div class="startup"><h1>Unable to open the workspace</h1><p>Check your connection, then try again.</p><button class="button primary" data-action="reload">Try again</button></div>';
   }
 }
 start();

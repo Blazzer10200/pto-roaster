@@ -1,3 +1,4 @@
+import {sampleData} from './test-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -7,6 +8,7 @@ import worker from './worker.js';
 import {createDevApi} from './dev-api.mjs';
 import {totp,decryptBackup,unseal} from './security-crypto.mjs';
 import {restoreSnapshot} from './backup-restore.mjs';
+import {createHash} from 'node:crypto';
 
 const origin='https://blazzer10200.github.io',apiOrigin='https://bandbook.test';
 const password='Testing-only-Password-32768';
@@ -23,7 +25,7 @@ function request(path,body,{token='',method=body?'POST':'GET',source=origin,head
 async function call(env,path,body,options){return worker.fetch(request(path,body,options),env);}
 async function initialized(t){
  const env=database();t.after(()=>env.sql.close());
- const local=createDevApi({key:Buffer.from(env.PTO_SECURITY_KEY,'base64')});
+ const local=createDevApi({seed:sampleData(),key:Buffer.from(env.PTO_SECURITY_KEY,'base64')});
  for(const [id,owner,roles] of [['owner',1,[]],['leader',0,['admin']]])local.db.prepare("INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,?,?,'approved')").run(id,id,id+'@pto.invalid',id,hash,owner,JSON.stringify(roles));
  const snapshot=local.snapshot();local.close();
  const migrated=await call(env,'/api/operator/migrate',snapshot,{source:apiOrigin,headers:{'X-PTO-Migration':env.PTO_MIGRATION_TOKEN}});assert.equal(migrated.status,200,await migrated.text());
@@ -42,6 +44,23 @@ test('public page requires application login; migration is authenticated and one
  assert.equal((await call(env,'/api/operator/migrate',env.original)).status,404);
  const res=await worker.fetch(new Request(apiOrigin+'/'),{ASSETS:{fetch:async()=>new Response('<h1>PTO</h1>')}});
  assert.equal(res.status,200);assert.equal(res.headers.get('X-Frame-Options'),'DENY');
+});
+test('deployment Owner recovery is scoped, expires, revokes sessions and cannot replay',async t=>{
+ const env=await initialized(t),owner=await login(env,'owner'),leader=await login(env);
+ const nextPassword='Replacement-owner-password-999',nextSalt='03'.repeat(16);
+ const replacement=nextSalt+':'+scryptSync(nextPassword,nextSalt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024}).toString('hex');
+ const settings={ownerId:'owner',username:'owner',previousDigest:createHash('sha256').update(hash).digest('hex'),password:replacement,expires:Date.now()+1800000};
+ env.PTO_OWNER_PASSWORD_RESET=JSON.stringify({...settings,ownerId:'leader',username:'leader'});
+ assert.equal((await call(env,'/api/ledger',undefined,owner)).status,200);
+ env.PTO_OWNER_PASSWORD_RESET=JSON.stringify({...settings,expires:Date.now()-1});
+ assert.equal((await call(env,'/api/ledger',undefined,owner)).status,200);
+ env.PTO_OWNER_PASSWORD_RESET=JSON.stringify(settings);
+ assert.equal((await call(env,'/api/ledger',undefined,owner)).status,401);
+ assert.equal((await call(env,'/api/ledger',undefined,leader)).status,200);
+ const signedIn=await call(env,'/api/auth/login',{username:'owner',password:nextPassword});assert.equal(signedIn.status,200);
+ const renewed={token:signedIn.headers.get('x-pto-session')};assert.equal((await call(env,'/api/ledger',undefined,renewed)).status,200);
+ assert.equal((await signedIn.json()).user.owner,true);
+ assert.equal(env.sql.prepare("SELECT count(*) AS n FROM pto_events WHERE action LIKE 'Owner password reset%'").get().n,1);
 });
 test('migrated leader signs in from Pages; unauthorized origins cannot read or preflight',async t=>{
  const env=await initialized(t),{token,data}=await login(env);
@@ -63,6 +82,11 @@ test('registration waits for approval; member reads are filtered and cannot save
  const loaded=await (await call(env,'/api/ledger',undefined,member)).json();assert.equal(loaded.data.purchases.length,0);assert.ok(loaded.data.members.length);
  assert.equal((await call(env,'/api/ledger',{data:loaded.data,revision:loaded.revision},{...member,method:'PUT'})).status,403);
  assert.equal((await call(env,'/api/access',undefined,member)).status,403);
+ assert.equal((await call(env,'/api/presence',{page:'roster'},member)).status,200);
+ assert.equal((await call(env,'/api/presence',undefined,member)).status,403);
+ assert.equal((await call(env,'/api/presence',{page:'access'},member)).status,403);
+ let online=await (await call(env,'/api/presence',undefined,leader)).json();assert.equal(online.users.length,1);assert.equal(online.users[0].id,u.id);assert.equal(online.users[0].page,'Roster');assert.equal(online.users[0].password,undefined);
+ await call(env,'/api/auth/logout',{},member);online=await (await call(env,'/api/presence',undefined,leader)).json();assert.equal(online.users.length,0);
  assert.equal((await call(env,'/api/users/owner',{disabled:true,roleIds:[]},{...leader,method:'PUT'})).status,400);
 });
 test('simultaneous edits preserve one winner and encrypted backups restore accounts',async t=>{

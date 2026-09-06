@@ -1,3 +1,4 @@
+import {sampleData} from './test-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {initialAccess,permissionsFor,visibleData,mergeAuthorizedData,validateAccess} from './access-model.js';
@@ -14,12 +15,12 @@ test('categories must contain every page exactly once and levels fail closed',()
   const other=initialAccess();other.roles[0].pages.roster='god';assert.throws(()=>validateAccess(other));
 });
 test('hidden ledger and unknown fields never reach a roster-only viewer',()=>{
-  const data=freshData(true);data.unexpectedSecret='hidden';const permissions=permissionsFor({roleIds:['member']},initialAccess());
+  const data=sampleData();data.unexpectedSecret='hidden';const permissions=permissionsFor({roleIds:['member']},initialAccess());
   const visible=visibleData(data,permissions);assert.equal(visible.purchases.length,0);assert.equal(visible.contacts.length,0);assert.equal(visible.bands.length,0);assert.equal(visible.members.length,4);assert.equal(visible.unexpectedSecret,undefined);
   assert.throws(()=>mergeAuthorizedData(data,{...visible,members:[]},permissions));
 });
 test('bands managers can append without reading or overwriting hidden history',()=>{
-  const current=freshData(true),permissions={bands:'manage'},visible=visibleData(current,permissions);
+  const current=sampleData(),permissions={bands:'manage'},visible=visibleData(current,permissions);
   const entry={...current.purchases[0],id:'new-entry'};
   const next=mergeAuthorizedData(current,{...visible,purchases:[entry]},permissions);
   assert.equal(next.purchases.length,current.purchases.length+1);assert.deepEqual(next.members,current.members);assert.deepEqual(next.contacts,current.contacts);

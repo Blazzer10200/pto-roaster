@@ -1,3 +1,4 @@
+import {sampleData} from './test-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createDevApi} from './dev-api.mjs';
@@ -6,7 +7,7 @@ import {restoreSnapshot} from './backup-restore.mjs';
 const origin='http://127.0.0.1:4173',password='Security-Test-Password-123',replacement='Replacement-Test-Password-456';
 const request=(path,body,cookie='',method=body?'POST':'GET')=>new Request(origin+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body?{Origin:origin,'X-Bandbook-Request':'1','Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
 const cookie=response=>response.headers.get('set-cookie')?.split(';')[0]||'';
-async function fixture(t){let time=Date.now();const api=createDevApi({now:()=>time});t.after(()=>api.close());const response=await api.handle(request('/api/auth/setup',{username:'owner',name:'Test Owner',password}));assert.equal(response.status,200);return {api,owner:cookie(response),tick:()=>time+=30000,now:()=>time};}
+async function fixture(t){let time=Date.now();const api=createDevApi({seed:sampleData(),now:()=>time});t.after(()=>api.close());const response=await api.handle(request('/api/auth/setup',{username:'owner',name:'Test Owner',password}));assert.equal(response.status,200);return {api,owner:cookie(response),tick:()=>time+=30000,now:()=>time};}
 async function enroll(f,c=f.owner){const setup=await f.api.handle(request('/api/security/setup',{currentPassword:password},c));assert.equal(setup.status,200);const {secret,qr}=await setup.json();assert.match(qr,/^data:image\/png;base64,/);const response=await f.api.handle(request('/api/security/confirm',{code:totp(secret,f.now())},c));assert.equal(response.status,200);return {secret,cookie:cookie(response),...(await response.json())};}
 async function login(api,username='owner',pass=password){return api.handle(request('/api/auth/login',{username,password:pass}));}
 test('TOTP matches RFC 6238 SHA-1 vectors and rejects invalid or replayed codes',()=>{
