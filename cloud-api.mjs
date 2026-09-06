@@ -3,6 +3,8 @@ import {Buffer} from 'node:buffer';
 import {promisify} from 'node:util';
 import {applyOwnerPasswordReset} from './owner-password-reset.mjs';
 import {onlineUsers} from './presence.js';
+import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
+import {changeVersions} from './change-versions.js';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import QRCodeSVG from 'qrcode/lib/renderer/svg-tag.js';
 import {validateBackup} from './model.js';
@@ -14,7 +16,7 @@ export const githubOrigin='https://blazzer10200.github.io';
 export const allowedOrigin=request=>[new URL(request.url).origin,githubOrigin].includes(request.headers.get('origin'));
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff',...headers}});
-const publicUser=u=>({id:u.id,name:u.name,username:u.username,owner:!!u.owner,disabled:!!u.disabled,approval:u.approval,requestedAt:u.requested_at,reviewedAt:u.reviewed_at,roleIds:JSON.parse(u.roles),mfaVerified:!!u.mfa_verified});
+const publicUser=u=>({id:u.id,...profileOf(u),owner:!!u.owner,disabled:!!u.disabled,approval:u.approval,requestedAt:u.requested_at,reviewedAt:u.reviewed_at,roleIds:JSON.parse(u.roles),mfaVerified:!!u.mfa_verified,remembered:!!u.remembered});
 const passwordValid=p=>{if(typeof p!=='string'||p.length<12||p.length>128)fail('Use a password between 12 and 128 characters.');};
 // Bound expensive hashing across requests in this isolate (scrypt uses ~32 MiB).
 let cryptoJobs=0;
@@ -23,7 +25,7 @@ async function hashPassword(password,salt=randomBytes(16).toString('hex')){
   cryptoJobs++;try{return salt+':'+Buffer.from(await scrypt(password,salt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024})).toString('hex');}finally{cryptoJobs--;}
 }
 async function verify(password,stored){if(typeof password!=='string'||password.length>128)return false;const result=await hashPassword(password,stored.split(':')[0]);return timingSafeEqual(Buffer.from(result),Buffer.from(stored));}
-const fields=body=>{const name=typeof body.name==='string'?body.name.trim():'',username=typeof body.username==='string'?body.username.trim().toLowerCase():'';if(!name||name.length>60||!/^[a-z0-9_.-]{3,32}$/.test(username))fail('Enter your in-character name and a username of 3–32 letters, numbers, dots, underscores, or hyphens.');return {name,username};};
+const fields=body=>profileFields(body);
 const tokenOf=request=>request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]||(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('pto_session='))?.slice(12)||'';
 const backupTables=['users','config','workspace','audit','account_security','recovery_codes','security_policy'];
 
@@ -79,42 +81,42 @@ export async function handleCloudApi(request,env){
     for(let attempt=0;attempt<3;attempt++){
       const row=await first('SELECT * FROM pto_state WHERE id=1');
       if(!row)return route==='/api/session'?json({authenticated:false,setupRequired:false,development:false}):json({error:'The website is being prepared. Please try again shortly.'},503);
-      const s=JSON.parse(row.document),before=row.document,events=[];let responseToken=null;
-      const audit=(id,action,document=null)=>events.push({at:new Date(now).toISOString(),user_id:id,action,document});
+      const s=JSON.parse(row.document),before=row.document,events=[];let responseToken=null,responseRemember=false;
+      const audit=(id,action,document=null)=>{s.auditRevision=(s.auditRevision||0)+1;events.push({at:new Date(now).toISOString(),user_id:id,action,document});};
       const findUser=login=>s.users.find(u=>u.username.toLowerCase()===login||u.email===login);
-      const auth=()=>{const session=s.sessions.find(x=>x.hash===digest(tokenOf(request))&&x.expires>now),u=session&&s.users.find(u=>u.id===session.user_id&&!u.disabled);return u?{...u,mfa_verified:session.mfa_verified}:null;};
+      const auth=()=>{const session=s.sessions.find(x=>x.hash===digest(tokenOf(request))&&x.expires>now),u=session&&s.users.find(u=>u.id===session.user_id&&!u.disabled);return u?{...u,mfa_verified:session.mfa_verified,remembered:!!session.remember}:null;};
       let user=auth();const securityRow=id=>s.security.find(r=>r.user_id===id),enabled=id=>!!securityRow(id)?.secret;
       const permissions=u=>permissionsFor(publicUser(u),s.config);
       const status=u=>{const admin=u.approval==='approved'&&(!!u.owner||permits(permissions(u),'access','manage'));return {mfaEnabled:enabled(u.id),recoveryCodes:s.recovery.filter(r=>r.user_id===u.id).length,admin,requireAdminMfa:s.policy,enrollmentRequired:s.policy&&admin&&!enabled(u.id)};};
-      const sessionData=u=>({authenticated:true,user:publicUser(u),security:status(u),roles:s.config.roles.filter(r=>JSON.parse(u.roles).includes(r.id)).map(({id,name,color})=>({id,name,color})),permissions:permissions(u),categories:u.approval==='approved'?s.config.categories:[],pendingRequests:permits(permissions(u),'requests')?s.users.filter(u=>u.approval==='pending').length:0,development:false});
+      const sessionData=u=>({authenticated:true,user:publicUser(u),security:status(u),roles:s.config.roles.filter(r=>JSON.parse(u.roles).includes(r.id)).map(({id,name,color})=>({id,name,color})),permissions:permissions(u),categories:u.approval==='approved'?s.config.categories:[],pendingRequests:permits(permissions(u),'requests')?s.users.filter(u=>u.approval==='pending').length:0,versions:changeVersions({user:u,permissions:permissions(u),users:s.users,workspaceRevision:s.workspace.revision,accessRevision:s.config.revision,auditRevision:s.auditRevision||0}),development:false});
       const revoke=id=>{s.sessions=s.sessions.filter(r=>r.user_id!==id);s.challenges=s.challenges.filter(r=>r.user_id!==id);};
-      const newSession=(u,verified=false)=>{responseToken=randomBytes(32).toString('base64url');s.sessions=s.sessions.filter(r=>r.expires>now);if(s.sessions.filter(r=>r.user_id===u.id).length>=20)s.sessions.splice(s.sessions.findIndex(r=>r.user_id===u.id),1);s.sessions.push({hash:digest(responseToken),user_id:u.id,expires:now+43200000,mfa_verified:Number(verified)});return sessionData({...u,mfa_verified:Number(verified)});};
+      const newSession=(u,verified=false,remember=!!u.remembered)=>{responseRemember=remember;responseToken=randomBytes(32).toString('base64url');s.sessions=s.sessions.filter(r=>r.expires>now);if(s.sessions.filter(r=>r.user_id===u.id).length>=20)s.sessions.splice(s.sessions.findIndex(r=>r.user_id===u.id),1);s.sessions.push({hash:digest(responseToken),user_id:u.id,expires:now+(remember?2592000000:43200000),mfa_verified:Number(verified),remember:Number(remember)});return sessionData({...u,mfa_verified:Number(verified),remembered:remember});};
       const consumeTotp=(id,code,pending=false)=>{const r=securityRow(id);if(!r||!(pending?r.pending:r.secret)||(pending&&r.pending_until<now))return false;const secret=unseal(JSON.parse(pending?r.pending:r.secret),key).toString(),step=matchingStep(secret,code,pending?-1:r.last_step,now);if(step===null)return false;r.last_step=step;return step;};
       const codeHash=(id,code)=>digest(id+':'+String(code||'').toUpperCase().replace(/[^A-Z0-9]/g,''));
       const newCodes=id=>{const codes=Array.from({length:8},()=>randomBytes(12).toString('hex').toUpperCase().match(/.{1,6}/g).join('-'));s.recovery=s.recovery.filter(r=>r.user_id!==id);s.recovery.push(...codes.map(code=>({user_id:id,hash:codeHash(id,code)})));return codes;};
       async function reauthenticate(){await limit('confirm:'+user.id);if(!await verify(body.currentPassword,user.password))fail('Current password is incorrect.');if(enabled(user.id)&&consumeTotp(user.id,body.code)===false)fail('Enter a fresh six-digit authenticator code.');}
       const assertRoles=ids=>{if(!Array.isArray(ids)||new Set(ids).size!==ids.length||ids.some(id=>!s.config.roles.some(r=>r.id===id)))fail('Choose valid roles.');};
       const grantsWithin=ids=>{const grants=permissionsFor({roleIds:ids},s.config);return accessPages.every(p=>accessLevels.indexOf(grants[p.id])<=accessLevels.indexOf(permissions(user)[p.id]));};
-      const addUser=(f,password,roles,approval)=>{if(s.users.length>=500)fail('The account limit has been reached. Contact the Owner.');if(findUser(f.username))fail('That username is already taken.',409);const u={id:crypto.randomUUID(),...f,email:crypto.randomUUID()+'@pto.invalid',password,owner:0,disabled:0,roles:JSON.stringify(roles),approval,requested_at:new Date(now).toISOString(),reviewed_at:null,reviewed_by:null};s.users.push(u);return u;};
+      const addUser=(f,password,roles,approval)=>{if(s.users.length>=500)fail('The account limit has been reached. Contact the Owner.');uniqueProfile(s.users,f);const u={id:crypto.randomUUID(),...f,profileRevision:0,email:crypto.randomUUID()+'@pto.invalid',password,owner:0,disabled:0,roles:JSON.stringify(roles),approval,requested_at:new Date(now).toISOString(),reviewed_at:null,reviewed_by:null};s.users.push(u);return u;};
       async function snapshot(){return {format:'pto-full-backup',version:1,createdAt:new Date(now).toISOString(),key:key.toString('base64'),tables:{users:s.users,config:[{id:1,document:JSON.stringify(s.config)}],workspace:[s.workspace],audit:[...await all('SELECT * FROM pto_events ORDER BY id'),...events.map((e,i)=>({...e,id:1000000000+i}))],account_security:s.security.map(r=>({...r,pending:null,pending_until:null})),recovery_codes:s.recovery,security_policy:[{id:1,require_admin_mfa:Number(s.policy)}]}};}
       async function routeRequest(){
         if(route==='/api/session'&&method==='GET')return json(user?sessionData(user):{authenticated:false,setupRequired:false,development:false});
         if(route==='/api/auth/setup')fail('The Owner account is already set up.',409);
         if(route==='/api/auth/register'&&method==='POST'){
           await limit('register:'+source,10);const f=fields(body);passwordValid(body.password);if(findUser(f.username))fail('That username is already taken.',409);
-          const u=addUser(f,await hashPassword(body.password),[],'pending');audit(u.id,'Account approval requested');return json(newSession(u));
+          const u=addUser(f,await hashPassword(body.password),[],'pending');audit(u.id,'Account approval requested');return json(newSession(u,false,body.remember===true));
         }
         if(route==='/api/auth/login'&&method==='POST'){
           const login=String(body.username??body.email??'').trim().toLowerCase(),u=findUser(login);await limit('login:'+(u?.id||login));
           if(!await verify(body.password,u?.password||'0'.repeat(32)+':'+'00'.repeat(64))||!u||u.disabled){if(u)audit(u.id,'Failed sign-in');fail('Username or password is incorrect, or the account is disabled.',401);}
-          if(enabled(u.id)){const challenge=randomBytes(32).toString('base64url');s.challenges=s.challenges.filter(r=>r.expires>now&&r.user_id!==u.id);s.challenges.push({hash:digest(challenge),user_id:u.id,expires:now+300000,password_version:u.password});return json({mfaRequired:true,challenge});}
-          audit(u.id,'Signed in');return json(newSession(u));
+          if(enabled(u.id)){const challenge=randomBytes(32).toString('base64url');s.challenges=s.challenges.filter(r=>r.expires>now&&r.user_id!==u.id);s.challenges.push({hash:digest(challenge),user_id:u.id,expires:now+300000,password_version:u.password,remember:body.remember===true});return json({mfaRequired:true,challenge});}
+          audit(u.id,'Signed in');return json(newSession(u,false,body.remember===true));
         }
         if(route==='/api/auth/mfa'&&method==='POST'){
           const challenge=s.challenges.find(r=>r.hash===digest(String(body.challenge||''))&&r.expires>now),u=challenge&&s.users.find(u=>u.id===challenge.user_id);
           if(!u||u.disabled||u.password!==challenge.password_version)fail('This sign-in expired. Start again.',401);await limit('factor:'+u.id);
           if(!enabled(u.id)||consumeTotp(u.id,body.code)===false)fail('That code is invalid or already used. Try a fresh code.',401);
-          s.challenges=s.challenges.filter(r=>r.hash!==challenge.hash);audit(u.id,'Signed in with two-factor');return json(newSession(u,true));
+          s.challenges=s.challenges.filter(r=>r.hash!==challenge.hash);audit(u.id,'Signed in with two-factor');return json(newSession(u,true,!!challenge.remember));
         }
         if(route==='/api/auth/recover'&&method==='POST'){
           const login=String(body.username||'').trim().toLowerCase(),u=findUser(login);await limit('recovery:'+(u?.id||login));passwordValid(body.password);
@@ -124,7 +126,7 @@ export async function handleCloudApi(request,env){
         if(!user)fail('Sign in to continue.',401);
         if(route==='/api/auth/logout'&&method==='POST'){s.sessions=s.sessions.filter(r=>r.hash!==digest(tokenOf(request)));responseToken='';return json({ok:true});}
         if(route==='/api/auth/password'&&method==='POST'){
-          passwordValid(body.password);await reauthenticate();const u=s.users.find(u=>u.id===user.id);u.password=await hashPassword(body.password);revoke(u.id);audit(u.id,'Password changed');return json(newSession(u,enabled(u.id)));
+          passwordValid(body.password);await reauthenticate();const u=s.users.find(u=>u.id===user.id);u.password=await hashPassword(body.password);revoke(u.id);audit(u.id,'Password changed');return json(newSession(u,enabled(u.id),user.remembered));
         }
         if(route==='/api/security'&&method==='GET')return json({...status(user),sessions:s.sessions.filter(r=>r.user_id===user.id&&r.expires>now).length});
         if(route==='/api/security/setup'&&method==='POST'){
@@ -146,6 +148,15 @@ export async function handleCloudApi(request,env){
         if(enabled(user.id)&&!user.mfa_verified)return json({error:'Sign in again with your authenticator.',reauthenticate:true},401);
         if(user.approval!=='approved')fail(user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.',403);
         const perms=permissions(user),requirePage=(p,l='view')=>{if(!permits(perms,p,l))fail('Your role does not have permission for this page.',403);};
+        if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
+          const proposal=memberRequest({route,method,body,users:s.users,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user});
+          if(proposal){
+            if(proposal.user)Object.assign(s.users.find(u=>u.id===proposal.user.id),proposal.user);
+            if(proposal.nextData)s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(proposal.nextData)};
+            if(proposal.action)audit(user.id,proposal.action);
+            return json(proposal.payload);
+          }
+        }
         if(route==='/api/presence'){
           if(method==='GET'){requirePage('access','manage');return json({users:onlineUsers(s.sessions,s.users,now)});}
           if(method==='POST'){
@@ -159,9 +170,19 @@ export async function handleCloudApi(request,env){
         if(route==='/api/audit'&&method==='GET'){
           requirePage('access','manage');const rows=await all('SELECT id,at,user_id,action FROM pto_events WHERE id<? ORDER BY id DESC LIMIT 51',Number(searchParams.get('before'))||Number.MAX_SAFE_INTEGER);return json({events:rows.slice(0,50).map(e=>({...e,actor:s.users.find(u=>u.id===e.user_id)?.name||'Site operator'})),next:rows.length>50?rows[49].id:null});
         }
-        if(route==='/api/requests'&&method==='GET'){requirePage('requests');return json({requests:s.users.filter(u=>['pending','denied'].includes(u.approval)).map(publicUser),roles:s.config.roles.filter(r=>grantsWithin([r.id]))});}
+        if(route==='/api/requests'&&method==='GET'){requirePage('requests');const data=validateBackup(JSON.parse(s.workspace.document));return json({requests:s.users.filter(u=>['pending','denied'].includes(u.approval)).map(publicUser),roles:s.config.roles.filter(r=>grantsWithin([r.id])),ranks:data.ranks,revision:s.workspace.revision,unlinkedMembers:permits(perms,'roster','manage')?data.members.filter(m=>!m.userId).map(({id,name,rank})=>({id,name,rank})):[]});}
         if(route.startsWith('/api/requests/')&&method==='POST'){
-          requirePage('requests','manage');const target=s.users.find(u=>u.id===route.slice(14));if(!target||target.owner)fail('Request not found.',404);if(target.approval!=='pending')fail('This request was already reviewed. Refresh the queue.',409);if(!['approved','denied'].includes(body.decision))fail('Choose approve or decline.');const ids=body.decision==='approved'?body.roleIds:[];assertRoles(ids);if(body.decision==='approved'&&(!ids.length||!grantsWithin(ids)))fail('Assign at least one role within your own access.',403);
+          requirePage('requests','manage');const target=s.users.find(u=>u.id===route.slice(14));if(!target||target.owner)fail('Request not found.',404);
+          if(body.decision==='reopen'){
+            if(target.approval!=='denied')fail('Only declined requests can be reopened. Refresh the queue.',409);
+            Object.assign(target,{approval:'pending',roles:'[]',requested_at:new Date(now).toISOString(),reviewed_at:null,reviewed_by:null});audit(user.id,'Account request reopened: '+target.name);return json({ok:true});
+          }
+          if(target.approval!=='pending')fail('This request was already reviewed. Refresh the queue.',409);if(!['approved','denied'].includes(body.decision))fail('Choose approve or decline.');const ids=body.decision==='approved'?body.roleIds:[];assertRoles(ids);if(body.decision==='approved'&&(!ids.length||!grantsWithin(ids)))fail('Assign at least one role within your own access.',403);
+          if(body.decision==='approved'){
+            requirePage('roster','manage');const profile=updatedProfile(s.users,target,body.profile,user,{review:!permits(perms,'access','manage')});
+            const next=attachMember(validateBackup(JSON.parse(s.workspace.document)),s.users,{...profile,approval:'approved'},body,s.workspace.revision);
+            Object.assign(target,profile);s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(next)};
+          }
           Object.assign(target,{approval:body.decision,roles:JSON.stringify(ids),reviewed_at:new Date(now).toISOString(),reviewed_by:user.id});audit(user.id,'Account request '+body.decision+': '+target.name);return json({ok:true});
         }
         if(route==='/api/access'){
@@ -174,7 +195,7 @@ export async function handleCloudApi(request,env){
         }
         if(route==='/api/ledger'){
           const current=validateBackup(JSON.parse(s.workspace.document));if(method==='GET')return json({data:visibleData(current,perms),revision:s.workspace.revision});
-          if(method==='PUT'){if(!['roster','bands','ledger','settings'].some(p=>permits(perms,p,'manage')))fail('Your roles have view access only.',403);if(!Number.isSafeInteger(body.revision)||body.revision!==s.workspace.revision)return json({error:'Records changed. Reload before saving.',conflict:true},409);let next;try{next=validateBackup(mergeAuthorizedData(current,validateBackup(body.data),perms));}catch(e){fail(e.message,403);}s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(next)};audit(user.id,'Workspace updated',JSON.stringify(current));return json({data:visibleData(next,perms),revision:s.workspace.revision});}
+          if(method==='PUT'){if(!['roster','bands','ledger','settings'].some(p=>permits(perms,p,'manage')))fail('Your roles have view access only.',403);if(!Number.isSafeInteger(body.revision)||body.revision!==s.workspace.revision)return json({error:'Records changed. Reload before saving.',conflict:true},409);let next;try{next=validateBackup(mergeAuthorizedData(current,validateBackup(body.data),perms));assertLinkedMembers(current,next,s.users);}catch(e){fail(e.message,403);}s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(next)};audit(user.id,'Workspace updated',JSON.stringify(current));return json({data:visibleData(next,perms),revision:s.workspace.revision});}
         }
         fail('Not found.',404);
       }
@@ -191,7 +212,7 @@ export async function handleCloudApi(request,env){
         }
         const result=await db.batch(statements);if(!result[0].meta.changes)continue;
       }
-      if(responseToken!==null){response.headers.set('Set-Cookie',`pto_session=${responseToken}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${responseToken?43200:0}`);if(request.headers.get('origin')===githubOrigin)response.headers.set('X-PTO-Session',responseToken||'signed-out');}
+      if(responseToken!==null){const crossSite=request.headers.get('origin')===githubOrigin;response.headers.set('Set-Cookie',`pto_session=${responseToken}; Secure; HttpOnly; SameSite=${crossSite?'None; Partitioned':'Strict'}; Path=/${!responseToken?'; Max-Age=0':responseRemember?'; Max-Age=2592000':''}`);if(crossSite)response.headers.set('X-PTO-Session',responseToken||'signed-out');}
       return response;
     }
     return json({error:'Another update finished first. Please try again.'},409);

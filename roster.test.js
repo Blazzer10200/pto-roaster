@@ -23,10 +23,10 @@ test('roster validation rejects bad statuses, duplicate IDs, limits, and rank li
     const data=sampleData();modify(data);assert.throws(()=>validateBackup(data));
   }
 });
-test('roster filters search callsigns and render user text without interpreting HTML',()=>{
-  const data=sampleData();data.members[0].name='<img src=x onerror=alert(1)>';
-  const rows=rosterRows(data,'PTO-01');assert.match(rows,/&lt;img/);assert.doesNotMatch(rows,/<img src=x/);assert.doesNotMatch(rows,/Nico Vega/);
-  data.members[0].status='archived';assert.doesNotMatch(rosterRows(data,'PTO-01'),/data-edit-member/);
-  assert.match(rosterRows(data,'PTO-01','archived'),/data-edit-member/);
+test('roster filters search State IDs and render user text without interpreting HTML',()=>{
+  const data=sampleData();data.members[0].stateId='01234';data.members[0].name='<img src=x onerror=alert(1)>';
+  const rows=rosterRows(data,'01234');assert.match(rows,/&lt;img/);assert.doesNotMatch(rows,/<img src=x/);assert.doesNotMatch(rows,/Nico Vega/);
+  data.members[0].status='archived';assert.doesNotMatch(rosterRows(data,'01234'),/data-edit-member/);
+  assert.match(rosterRows(data,'01234','archived'),/data-edit-member/);
   assert.match(rosterPage(data),/Gang roster/);assert.doesNotMatch(memberForm(data,data.members[0]),/<img src=x/);
 });

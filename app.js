@@ -1,3 +1,4 @@
+import {readIdentity,pickerMarkup,mountProfilePicker} from './profile-ui.js';
 import {authRequest,loginScreen,approvalScreen,mountAccess,mountRequests,accountDialog} from './auth-ui.js';
 import {securityGate,securityNudge} from './security-ui.js';
 import {permits} from './access-model.js';
@@ -13,6 +14,12 @@ const money = value => '$' + (value / 100).toLocaleString('en-US', {maximumFract
 const uid = () => crypto.randomUUID();
 const icon = (name, size=20) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${({grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',plus:'<path d="M12 5v14M5 12h14"/>',people:'<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 4v2"/>',history:'<path d="M3 10a9 9 0 1 1 1 7M3 4v6h6M12 7v5l3 2"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--panel)"/><circle cx="15" cy="17" r="3" fill="var(--panel)"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',down:'<path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/>',wallet:'<path d="M20 7H5a2 2 0 0 1 0-4h13v4M3 5v14a2 2 0 0 0 2 2h15V7M20 12h-5v5h5"/>',box:'<path d="m12 3 9 5v9l-9 5-9-5V8l9-5ZM3 8l9 5 9-5M12 13v9M7.5 5.5l9 5"/>',check:'<path d="m5 12 4 4L19 6"/>',search:'<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',close:'<path d="m6 6 12 12M18 6 6 18"/>',chevron:'<path d="m9 5 7 7-7 7"/>',coin:'<circle cx="12" cy="12" r="9"/><path d="M15 8H10a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H9M12 6v12"/>',moon:'<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/>'})[name] || ''}</svg>`;
 let data=freshData(), loadError = '', cloud=null, saving=false, authSession=null;
+let pageDirty=false,syncBusy=false;
+const hasOpenModal=()=>!!$('#modal')?.open;
+const canApplyRemote=()=>!pageDirty&&!saving&&!hasOpenModal();
+function syncMessage(message=''){const note=$('#live-sync-note');if(note){note.hidden=!message;note.textContent=message;}}
+document.addEventListener('input',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel'))pageDirty=true;});
+document.addEventListener('change',event=>{if(event.target.closest('#app main form')&&!event.target.closest('#requests-panel'))pageDirty=true;});
 const permissionPage=id=>({overview:'bands',history:'ledger',contacts:'ledger'}[id]||id);
 const can=(id,level='view')=>permits(authSession?.permissions,permissionPage(id),level);
 const storageLabel=()=>authSession?.development?'Saved locally':'Saved online';
@@ -28,6 +35,7 @@ async function commit(next) {
     next=validateBackup(next);
     if(cloud) data=validateBackup(await cloud.save(next));
     else throw Error('Sign in before saving records.');
+    pageDirty=false;
     if ($('#connection-status')) $('#connection-status').textContent=cloud?storageLabel():'Saved in this browser';
     return true;
   } catch(error) {
@@ -51,19 +59,20 @@ document.addEventListener('keydown',dismissAccountMenu);
 document.addEventListener('focusin',dismissAccountMenu);
 function go(next) {const target=next==='purchase'?'overview':next;if(!can(target)){toast('Your role does not have access to this page.');return;}page=target;search='';filter='all';render();sendPresence();window.scrollTo({top:0});}
 function render() {
+  pageDirty=false;
   if(!authSession?.authenticated||authSession.user.approval!=='approved'||authSession.security?.enrollmentRequired)return;
   const pages={roster:()=>rosterPage(data,memberSearch,memberFilter),overview:overview,history:historyPage,contacts:contactsPage,settings:settingsPage,access:()=>'<div id="access-panel"><p>Loading roles…</p></div>',requests:()=>'<div id="requests-panel"><p>Loading join requests…</p></div>'};
   if(!can(page))page=Object.keys(pages).find(id=>can(id))||'none';
   const navigation={roster:['roster','people','Roster'],bands:['overview','wallet','Bands'],ledger:['history','history','Ledger'],settings:['settings','settings','Settings'],access:['access','people','Roles & access'],requests:['requests','people','Join requests']};
   const groups=authSession.categories.map(category=>({...category,links:category.pages.filter(id=>can(id))})).filter(category=>category.links.length);
-  $('#app').innerHTML=`<header class="simple-header"><div class="header-top"><a class="brand" href="#" data-page="${Object.keys(pages).find(id=>can(id))||'none'}"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a>${accountMenu(authSession)}</div><nav class="category-nav" aria-label="Main navigation">${groups.map(category=>`<div class="nav-category"><span>${esc(category.id==='treasury'&&category.name==='Treasury'?'Finances':category.name)}</span><div>${category.links.map(id=>{const [route,ic,label]=navigation[id];return `<button data-page="${route}" class="simple-nav ${permissionPage(page)===id?'active':''}" ${permissionPage(page)===id?'aria-current="page"':''}>${icon(ic,16)}<span>${label}</span>${id==='requests'?`<span class="request-nav-count" ${authSession.pendingRequests?'':'hidden'}>${authSession.pendingRequests||0}</span>`:''}</button>`;}).join('')}</div></div>`).join('')}</nav></header><div class="simple-shell"><main>${securityNudge(authSession)}${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${page!=='none'&&!can(page,'manage')?'<div class="readonly-notice">View access · Your role cannot save changes on this page.</div>':''}${pages[page]?pages[page]():'<div class="empty"><h1>Access pending</h1><p>Your account is ready. Ask an Owner or access manager to assign a role.</p></div>'}</main><footer><span id="connection-status">${storageLabel()}</span><div class="footer-links">${can('settings')?'<button class="text-button" data-page="settings">Backups & settings</button>':''}<button class="text-button" data-action="reload">Reload latest</button></div></footer></div>`;
+  $('#app').innerHTML=`<header class="simple-header"><div class="header-top"><a class="brand" href="#" data-page="${Object.keys(pages).find(id=>can(id))||'none'}"><picture class="gang-logo"><source media="(prefers-reduced-motion: reduce)" srcset="./pto-still.png"><img src="./pto.gif" alt="" width="56" height="56"></picture>${esc(data.name)}</a>${accountMenu(authSession)}</div><nav class="category-nav" aria-label="Main navigation">${groups.map(category=>`<div class="nav-category"><span>${esc(category.id==='treasury'&&category.name==='Treasury'?'Finances':category.name)}</span><div>${category.links.map(id=>{const [route,ic,label]=navigation[id];return `<button data-page="${route}" class="simple-nav ${permissionPage(page)===id?'active':''}" ${permissionPage(page)===id?'aria-current="page"':''}>${icon(ic,16)}<span>${label}</span>${id==='requests'?`<span class="request-nav-count" ${authSession.pendingRequests?'':'hidden'}>${authSession.pendingRequests||0}</span>`:''}</button>`;}).join('')}</div></div>`).join('')}</nav></header><div class="simple-shell"><main>${securityNudge(authSession)}<div id="live-sync-note" class="notice" role="status" hidden></div>${loadError?`<div class="notice error">${esc(loadError)}</div>`:''}${page!=='none'&&!can(page,'manage')?'<div class="readonly-notice">View access · Your role cannot save changes on this page.</div>':''}${pages[page]?pages[page]():'<div class="empty"><h1>Access pending</h1><p>Your account is ready. Ask an Owner or access manager to assign a role.</p></div>'}</main><footer><span id="connection-status">${storageLabel()}</span><div class="footer-links">${can('settings')?'<button class="text-button" data-page="settings">Backups & settings</button>':''}<button class="text-button" data-action="reload">Reload latest</button></div></footer></div>`;
   bindForms();updateCalculator();applyPagePermissions();
-  if(page==='access')mountAccess($('#access-panel'),authSession,refreshSession);
-  if(page==='requests')mountRequests($('#requests-panel'),authSession,async message=>{await pollSession();if(message)toast(message);});
+  if(page==='access')mountAccess($('#access-panel'),authSession,refreshSession,async()=>{authSession=await authRequest('/api/session');data=validateBackup(await cloud.load());pageDirty=false;});
+  if(page==='requests')mountRequests($('#requests-panel'),authSession,async message=>{data=validateBackup(await cloud.load());await pollSession();if(message)toast(message);});
 }
 function applyPagePermissions(){
   document.querySelectorAll('main [data-page]').forEach(button=>{if(!can(button.dataset.page))button.hidden=true;});
-  for(const [selector,required] of [['[data-action=add-member]','roster'],['[data-action=gang-notes]','roster'],['[data-action=add-contact]','bands']])document.querySelectorAll(selector).forEach(button=>{if(!can(required,'manage'))button.hidden=true;});
+  for(const [selector,required] of [['[data-action=invite-member]','roster'],['[data-action=gang-notes]','roster'],['[data-action=add-contact]','bands']])document.querySelectorAll(selector).forEach(button=>{if(!can(required,'manage'))button.hidden=true;});
   if(!can('ledger'))document.querySelectorAll('.owed-panel,.gang-bands').forEach(panel=>panel.hidden=true);
   if(page==='overview'&&!can('bands','manage'))$('#purchase-form .save-button').disabled=true;
   if(page==='settings'&&!can('settings','manage'))document.querySelectorAll('#settings-form input,#settings-form button,#gang-settings-form input,#gang-settings-form textarea,#gang-settings-form button').forEach(input=>input.disabled=true);
@@ -105,10 +114,10 @@ function historyPage() {
 }
 function contactCards() {
   const people=data.contacts.filter(c=>`${c.name} ${c.notes}`.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>contactBalance(data.purchases,b.id)-contactBalance(data.purchases,a.id)||a.name.localeCompare(b.name));
-  return people.length?people.map((c,i)=>`<button class="player-row" data-contact="${esc(c.id)}">${avatar(c,i)}<strong>${esc(c.name)}</strong><span class="player-balance"><strong class="${contactBalance(data.purchases,c.id)?'amber':'lime'}">${money(contactBalance(data.purchases,c.id))}</strong><small>Owed</small></span>${icon('chevron',16)}</button>`).join(''):`<div class="empty"><h3>${search?'No matching players.':'No player accounts yet.'}</h3><p>${search?'Try a different name or show all players.':'Add a player to keep their drop-offs and balance together.'}</p>${search?'<button class="button secondary" data-action="reset-contacts">Show all players</button>':can('bands','manage')?'<button class="button primary" data-action="add-contact">+ Add player</button>':''}</div>`;
+  return people.length?people.map((c,i)=>`<button class="player-row" data-contact="${esc(c.id)}">${avatar(c,i)}<strong>${esc(c.name)}</strong><span class="player-balance"><strong class="${contactBalance(data.purchases,c.id)?'amber':'lime'}">${money(contactBalance(data.purchases,c.id))}</strong><small>Owed</small></span>${icon('chevron',16)}</button>`).join(''):`<div class="empty"><h3>${search?'No matching players.':'No ledger players yet.'}</h3><p>${search?'Try a different name or show all players.':'Add a player to keep their drop-offs and balance together.'}</p>${search?'<button class="button secondary" data-action="reset-contacts">Show all players</button>':can('bands','manage')?'<button class="button primary" data-action="add-contact">+ Add player</button>':''}</div>`;
 }
 function contactsPage() {
-  return title('','Player balances','Band accounts for members and other players.',`<button class="button secondary" data-page="history">Ledger</button><button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
+  return title('','Player balances','Band balances for members and other players. These records do not create website logins.',`<button class="button secondary" data-page="history">Ledger</button><button class="button primary" data-action="add-contact">${icon('plus',18)} Add player</button>`)+`<label class="search-field contact-search">${icon('search',17)}<input id="contact-search" placeholder="Find a player" aria-label="Search players"></label><div class="panel player-list" id="contact-results">${contactCards()}</div>`;
 }
 function bandSetting(b){return `<div class="setting-band" data-setting-band="${esc(b.id)}"><input type="color" name="color" value="${b.color}" aria-label="Band color"><input name="bandname" aria-label="Band name" value="${esc(b.name)}" maxlength="40" required><label class="money-input"><span>$</span><input name="price" aria-label="Default unit price" value="${b.price/100}" type="number" min="0" max="1000000000" step="0.01" required></label><label class="toggle-label"><input type="checkbox" name="active" ${b.active?'checked':''}> Active</label><button type="button" class="icon-button" data-move="up" aria-label="Move band up">↑</button><button type="button" class="icon-button" data-move="down" aria-label="Move band down">↓</button></div>`;}
 function settingsPage() {
@@ -148,22 +157,52 @@ function bindForms(){
   $('#history-search')?.addEventListener('input',e=>{search=e.target.value;$('#history-results').innerHTML=table(filteredPurchases());});
   $('#contact-search')?.addEventListener('input',e=>{search=e.target.value;$('#contact-results').innerHTML=contactCards();});
   $('#settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const bands=[...document.querySelectorAll('[data-setting-band]')].map(row=>({id:row.dataset.settingBand,name:row.querySelector('[name=bandname]').value.trim(),color:row.querySelector('[name=color]').value,price:cents(row.querySelector('[name=price]').value),active:row.querySelector('[name=active]').checked}));const next={...data,bands};try{validateBackup(next);if(await commit(next)){clearDraft();render();toast('Settings saved. Your new rates are ready.');}}catch(error){$('#settings-error').textContent=error.message;}});
-  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the current ledger with <strong>${next.members.length} members, ${next.contacts.length} band accounts, and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
+  $('#backup-file')?.addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>5000000)throw new Error('Please use a backup smaller than 5 MB.');const next=validateBackup(JSON.parse(await file.text()));openModal(`<h2>Restore this backup?</h2><p>This will replace the current ledger with <strong>${next.members.length} members, ${next.contacts.length} ledger players, and ${next.purchases.length} purchases</strong> from ${esc(next.name)}. Export your current ledger first if you want to keep it.</p><div class="modal-actions"><button class="button secondary" data-action="close">Cancel</button><button class="button primary" id="confirm-import">Restore backup</button></div>`);$('#confirm-import').onclick=async ()=>{if(await commit(next)){clearDraft();$('#modal').close();render();toast('Backup restored.');}};}catch(error){toast('Backup not restored: '+error.message);}e.target.value='';});
 }
 function openModal(html){$('#modal').innerHTML=`<button class="modal-close icon-button" data-action="close" aria-label="Close dialog">${icon('close')}</button>${html}`;if(!$('#modal').open)$('#modal').showModal();queueMicrotask(restrictModal);}
 function editMember(id) {
-  const member=data.members.find(m=>m.id===id);
-  openModal(memberForm(data,member));
-  const ranks=[...new Set([...data.ranks,...(member?[member.rank]:[])])];
-  mountPlayerPicker($('#member-rank-picker'),{options:ranks.map(rank=>({id:rank,name:rank})),value:member?.rank||data.ranks[data.ranks.length-1],noun:'rank',onChange:()=>{}});
+  const member=data.members.find(m=>m.id===id);if(!member)return;
+  const canManage=can('roster','manage'),canEditIdentity=canManage&&(!member.userId||(can('access','manage')));
+  const revision=cloud.revision;
+  openModal(memberForm(data,member,{canManage,canEditIdentity}));
+  const ranks=[...new Set([...data.ranks,member.rank])];
+  mountProfilePicker($('#modal'),'member-rank',ranks.map(rank=>({id:rank,name:rank})),member.rank);
   $('#member-form').onsubmit=async e=>{
-    e.preventDefault();
+    e.preventDefault();if(!canManage||saving)return;
+    const form=e.currentTarget,button=form.querySelector('button[type=submit]');button.disabled=true;
     try {
-      const item={id:member?.id||uid(),name:$('#member-name').value.trim(),callsign:$('#member-callsign').value.trim(),rank:$('#member-rank').value,status:document.querySelector('[name=member-status]:checked').value,joined:$('#member-joined').value,notes:$('#member-notes').value.trim()};
-      const next={...data,members:member?data.members.map(m=>m.id===member.id?item:m):[...data.members,item]};
-      if(await commit(validateBackup(next))){$('#modal').close();render();toast(member?'Member updated.':'Member added to the roster.');}
+      const body={revision,rank:$('#member-rank').value,status:form.querySelector('[name=member-status]:checked').value,joined:$('#member-joined').value,notes:$('#member-notes').value.trim(),...(canEditIdentity&&(!member.userId||['name','username','stateId','phone'].some(key=>(readIdentity(form,member)[key]??'')!==(member[key]??'')))?{profile:readIdentity(form,member)}:{})};
+      await authRequest('/api/members/'+id,{method:'PUT',body});
+      $('#modal').close();await refreshSession();toast('Member profile saved.');
     }catch(error){$('#member-error').textContent=error.message;}
+    finally{button.disabled=false;}
   };
+}
+function inviteMember(){
+  if(!can('roster','manage'))return;
+  const url=new URL(location.href);url.search='';url.hash='join';
+  openModal(`<h2>Invite member</h2><p>Share this link so they can create their own account with their character name, State ID, and phone number. Approve their request to add them to the roster.</p><label for="invite-link">Signup link</label><input id="invite-link" readonly value="${esc(url.href)}"><div class="member-actions"><button class="button primary" id="copy-invite">Copy link</button><button class="button secondary" data-action="existing-member">Add existing account</button></div><p id="invite-message" role="status"></p>${authSession.development?'<p class="access-help">This preview link works on this computer. Public invitations use the published website.</p>':''}`);
+  $('#copy-invite').onclick=async()=>{try{await navigator.clipboard.writeText(url.href);$('#invite-message').textContent='Link copied.';}catch{$('#invite-link').select();$('#invite-message').textContent='Select and copy the link above.';}};
+}
+async function addExistingMember(memberId=''){
+  if(!can('roster','manage'))return;
+  try{
+    data=validateBackup(await cloud.load());const revision=cloud.revision;
+    const directory=await authRequest('/api/profiles'),available=directory.users.filter(u=>!u.disabled&&!u.memberId);
+    const member=memberId?data.members.find(m=>m.id===memberId):null;
+    if(memberId&&(!member||member.userId))throw Error('This member changed. Reload the roster before linking.');
+    openModal(`<h2>${member?'Link account to '+esc(member.name):'Add existing account'}</h2><p>${member?'Choose the matching account. Its character name, username, State ID, and phone will be used; the current rank, joined date, status, and notes stay with this roster entry.':'Choose an approved account that is not yet on the roster.'}</p>${available.length?`<form id="link-member-form">${pickerMarkup('link-account','Account')}${member?'':pickerMarkup('link-rank','Gang rank')}<p id="link-account-details" class="access-help"></p><div class="form-error" role="alert"></div><button class="button primary" type="submit">${member?'Link account':'Add to roster'}</button></form>`:'<p>No available accounts. Already-linked members can be edited or restored from the roster. New members should create an account and request to join.</p>'}`);
+    if(!available.length)return;
+    mountProfilePicker($('#modal'),'link-account',available.map(u=>({id:u.id,name:u.name+' · @'+u.username+(u.stateId?' · '+u.stateId:'')})),'',id=>{const u=available.find(x=>x.id===id);$('#link-account-details').textContent=u?'State ID: '+(u.stateId||'Not set')+' · Phone: '+(u.phone||'Not set'):'';});
+    if(!member)mountProfilePicker($('#modal'),'link-rank',data.ranks.map(rank=>({id:rank,name:rank})),data.ranks.at(-1));
+    $('#link-member-form').onsubmit=async event=>{
+      event.preventDefault();const form=event.currentTarget,button=form.querySelector('button[type=submit]');button.disabled=true;
+      try{const user=available.find(u=>u.id===$('#link-account').value);if(!user)throw Error('Choose an account.');
+        await authRequest('/api/members',{method:'POST',body:{userId:user.id,profileRevision:user.profileRevision,memberId,joined:new Date().toLocaleDateString('en-CA'),rank:$('#link-rank')?.value,revision}});
+        $('#modal').close();await refreshSession();toast('Account linked to roster.');
+      }catch(error){form.querySelector('.form-error').textContent=error.message;}finally{button.disabled=false;}
+    };
+  }catch(error){toast(error.message);}
 }
 function editGangNotes(){
   openModal(`<h2>Gang notes</h2><form id="gang-notes-form"><label for="gang-notes">Reminders & priorities</label><textarea id="gang-notes" rows="7" maxlength="4000">${esc(data.gangNotes)}</textarea><div class="form-error" id="gang-notes-error" role="alert"></div><button class="button primary">Save notes</button></form>`);
@@ -174,7 +213,7 @@ function contactDetail(id) {
   const c=contact(id);if(!c)return;
   const records=data.purchases.filter(p=>p.contactId===id).sort((a,b)=>Date.parse(b.date)-Date.parse(a.date));
   const owed=contactBalance(data.purchases,id);
-  openModal(`<div class="detail-person">${avatar(c)}<div><div class="eyebrow">PLAYER ACCOUNT</div><h2>${esc(c.name)}</h2></div></div><p class="contact-note">${esc(c.notes||'')}</p><div class="detail-summary"><span>You owe them<strong class="${owed?'amber':'lime'}">${money(owed)}</strong></span><span>Total received<strong>${money(records.reduce((s,p)=>s+total(p),0))}</strong></span></div><div class="contact-actions"><button class="button primary" data-new-dropoff="${esc(id)}">${icon('plus',16)} Record bands</button><button class="button secondary" data-edit-contact="${esc(id)}">Edit player</button></div>${owed>0?`<form id="contact-payment-form" class="contact-payment-form"><label for="contact-payment-amount">Amount paid</label><p>Pays off the oldest unpaid bands first.</p><div class="payment-entry"><input id="contact-payment-amount" type="number" min="0.01" max="${owed/100}" step="0.01" value="${owed/100}" required aria-label="Amount paid to player"><button class="button primary" type="submit">Record payment</button></div><div id="contact-payment-error" class="form-error" role="alert"></div></form>`:'<div class="settled-note">'+icon('check',18)+' Nothing owed. You’re all settled up.</div>'}<h3 class="detail-history-title">History</h3>${records.length?records.map(p=>`<button class="detail-purchase" data-purchase="${esc(p.id)}"><span>${dateText(p.date)}<small>${p.lines.map(l=>`${l.quantity} × ${esc(l.name)}`).join(', ')}</small></span><span class="entry-amount"><strong>${money(total(p))}</strong><small>${money(balance(p))} owed</small></span>${status(p)}${icon('chevron',14)}</button>`).join(''):'<p>No bands recorded yet.</p>'}`);
+  openModal(`<div class="detail-person">${avatar(c)}<div><div class="eyebrow">LEDGER PLAYER</div><h2>${esc(c.name)}</h2></div></div><p class="contact-note">${esc(c.notes||'')}</p><div class="detail-summary"><span>You owe them<strong class="${owed?'amber':'lime'}">${money(owed)}</strong></span><span>Total received<strong>${money(records.reduce((s,p)=>s+total(p),0))}</strong></span></div><div class="contact-actions"><button class="button primary" data-new-dropoff="${esc(id)}">${icon('plus',16)} Record bands</button><button class="button secondary" data-edit-contact="${esc(id)}">Edit player</button></div>${owed>0?`<form id="contact-payment-form" class="contact-payment-form"><label for="contact-payment-amount">Amount paid</label><p>Pays off the oldest unpaid bands first.</p><div class="payment-entry"><input id="contact-payment-amount" type="number" min="0.01" max="${owed/100}" step="0.01" value="${owed/100}" required aria-label="Amount paid to player"><button class="button primary" type="submit">Record payment</button></div><div id="contact-payment-error" class="form-error" role="alert"></div></form>`:'<div class="settled-note">'+icon('check',18)+' Nothing owed. You’re all settled up.</div>'}<h3 class="detail-history-title">History</h3>${records.length?records.map(p=>`<button class="detail-purchase" data-purchase="${esc(p.id)}"><span>${dateText(p.date)}<small>${p.lines.map(l=>`${l.quantity} × ${esc(l.name)}`).join(', ')}</small></span><span class="entry-amount"><strong>${money(total(p))}</strong><small>${money(balance(p))} owed</small></span>${status(p)}${icon('chevron',14)}</button>`).join(''):'<p>No bands recorded yet.</p>'}`);
   $('#contact-payment-form')?.addEventListener('submit',async e=>{
     e.preventDefault();
     try {
@@ -192,6 +231,7 @@ document.addEventListener('click',async e=>{
   if(saving){e.preventDefault();return;}
   const button=e.target.closest('button,a');if(!button)return;
   if(button.dataset.editMember){editMember(button.dataset.editMember);return;}
+  if(button.dataset.linkMember){await addExistingMember(button.dataset.linkMember);return;}
   if(button.dataset.memberFilter){memberFilter=button.dataset.memberFilter;render();return;}
   if(button.dataset.archiveMember){if(await commit({...data,members:data.members.map(m=>m.id===button.dataset.archiveMember?{...m,status:'archived'}:m)})){$('#modal').close();render();toast('Member archived. You can restore them from Archive.');}return;}
   if(button.dataset.page){e.preventDefault();go(button.dataset.page);return;}
@@ -209,7 +249,8 @@ document.addEventListener('click',async e=>{
     case 'account':accountDialog(authSession.user,openModal,refreshSession);break;
     case 'logout':await authRequest('/api/auth/logout',{method:'POST',body:{}});$('#modal').close();authSession=null;cloud=null;clearDraft();await start();break;
     case 'close':$('#modal').close();break;
-    case 'add-member':editMember();break;
+    case 'invite-member':inviteMember();break;
+    case 'existing-member':await addExistingMember();break;
     case 'gang-notes':editGangNotes();break;
     case 'add-contact':contactForm();break;
     case 'pay-full':draftPaid=String(updateCalculator()/100);$('#amount-paid').value=draftPaid;updateCalculator();break;
@@ -236,17 +277,53 @@ async function sendPresence(){
   presenceBusy=true;try{await authRequest('/api/presence',{method:'POST',body:{page:permissionPage(page)}});}catch{}finally{presenceBusy=false;}
 }
 setInterval(sendPresence,45000);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sendPresence();});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){sendPresence();pollSession();}});
 async function pollSession(){
-  if(!authSession?.authenticated||saving||document.querySelector('[data-security-sensitive]'))return;
+  if(syncBusy||!authSession?.authenticated||saving||document.visibilityState!=='visible'||document.querySelector('[data-security-sensitive]'))return;
+  syncBusy=true;
   try{
-    const updated=await authRequest('/api/session');
-    if(!updated.authenticated||updated.user.approval!==authSession.user.approval||JSON.stringify(updated.permissions)!==JSON.stringify(authSession.permissions)||JSON.stringify(updated.categories)!==JSON.stringify(authSession.categories)||JSON.stringify(updated.roles)!==JSON.stringify(authSession.roles)||JSON.stringify(updated.security)!==JSON.stringify(authSession.security)){await openWorkspace(updated);return;}
+    const previous=authSession,updated=await authRequest('/api/session');
+    if(!updated.authenticated||updated.user.approval!==previous.user.approval||JSON.stringify(updated.permissions)!==JSON.stringify(previous.permissions)||JSON.stringify(updated.categories)!==JSON.stringify(previous.categories)||JSON.stringify(updated.roles)!==JSON.stringify(previous.roles)||JSON.stringify(updated.security)!==JSON.stringify(previous.security)){
+      $('#modal').close();await openWorkspace(updated);return;
+    }
     authSession=updated;
+    if(updated.user.approval!=='approved'){
+      if(updated.user.profileRevision!==previous.user.profileRevision)approvalScreen(updated,openWorkspace);
+      return;
+    }
+    if(updated.user.profileRevision!==previous.user.profileRevision){const menu=document.querySelector('.account-menu');if(menu)menu.outerHTML=accountMenu(updated);}
     document.querySelectorAll('.request-nav-count').forEach(badge=>{badge.textContent=updated.pendingRequests||0;badge.hidden=!updated.pendingRequests;});
-  }catch{}
+    const versions=updated.versions||{};let waiting=false;
+    if(cloud&&Number.isSafeInteger(versions.workspace)&&versions.workspace!==cloud.revision){
+      if(!canApplyRemote())waiting=true;
+      else{
+        const currentCloud=cloud,snapshot=await currentCloud.request('/api/ledger');
+        if(currentCloud===cloud&&canApplyRemote()&&snapshot.revision>=currentCloud.revision){
+          data=validateBackup(snapshot.data);currentCloud.revision=snapshot.revision;loadError='';
+          if(!['access','requests'].includes(page))render();
+        }else waiting=true;
+      }
+    }
+    const requests=$('#requests-panel');
+    if(requests?.refreshFromServer&&versions.requests!==requests.seenVersion){
+      if(await requests.refreshFromServer())requests.seenVersion=versions.requests;
+    }
+    const access=$('#access-panel'),seen=access?.seenVersions||{};
+    if(access?.refreshFromServer&&(seen.accounts!==versions.accounts||seen.access!==versions.access||(access.currentTab==='activity'&&seen.audit!==versions.audit))){
+      if(!canApplyRemote())waiting=true;
+      else if(await access.refreshFromServer(canApplyRemote))access.seenVersions={...versions};
+      else waiting=true;
+    }
+    syncMessage(waiting?'New updates are available. Your edits are preserved. Finish or cancel editing to load the latest records.':'');
+    if($('#connection-status')&&!loadError)$('#connection-status').textContent=storageLabel()+' · Updates connected';
+  }catch{
+    syncMessage('Connection interrupted. Checking for updates again automatically.');
+    if($('#connection-status'))$('#connection-status').textContent='Updates disconnected · retrying';
+  }finally{syncBusy=false;}
 }
-setInterval(()=>{if(document.visibilityState==='visible')pollSession();},30000);
+setInterval(pollSession,3000);
+window.addEventListener('focus',pollSession);
+$('#modal').addEventListener('close',pollSession);
 async function start() {
   $('#app').innerHTML='<div class="startup"><h1>PTO Roaster</h1><p>Opening your workspace…</p></div>';
   try {

@@ -1,0 +1,16 @@
+import {mountPlayerPicker} from './player-picker.js';
+export const escapeProfile=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc=escapeProfile;
+export function identityInputs(prefix,user={}, {username=true,readonly=false,required=true}={}){
+  const lock=readonly?'readonly':'',need=required?'required':'';
+  return `<div class="profile-fields"><div><label for="${prefix}-name">Character name</label><input id="${prefix}-name" data-profile="name" required maxlength="60" value="${esc(user.name)}" ${lock}></div>${username?`<div><label for="${prefix}-username">Username</label><input id="${prefix}-username" data-profile="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9_.\\-]{3,32}" autocapitalize="none" spellcheck="false" autocomplete="off" value="${esc(user.username)}" ${lock}></div>`:''}<div><label for="${prefix}-state-id">State ID</label><input id="${prefix}-state-id" data-profile="stateId" type="text" inputmode="numeric" pattern="[0-9]{5}" minlength="5" maxlength="5" ${need} value="${esc(user.stateId)}" ${lock}><small>Exactly five digits.</small></div><div><label for="${prefix}-phone">In-game phone number</label><input id="${prefix}-phone" data-profile="phone" type="tel" minlength="3" maxlength="30" ${need} value="${esc(user.phone)}" ${lock}></div></div>`;
+}
+export const readIdentity=(root,user={})=>({...Object.fromEntries([...root.querySelectorAll('[data-profile]')].map(el=>[el.dataset.profile,el.value.trim()])),profileRevision:user.profileRevision||0});
+export function pickerMarkup(id,label){
+  return `<label for="${id}-search">${esc(label)}</label><div class="player-picker" id="${id}-picker"><input type="hidden" id="${id}"><div class="picker-control"><input id="${id}-search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-options" aria-haspopup="listbox" autocomplete="off" required><button type="button" class="picker-toggle" data-picker-toggle aria-label="Open ${esc(label.toLowerCase())} list" tabindex="-1">⌄</button></div><div class="picker-panel" data-picker-panel hidden><div id="${id}-options" role="listbox" aria-label="${esc(label)}"></div><p class="picker-message" data-picker-message hidden></p></div></div>`;
+}
+export const mountProfilePicker=(root,id,options,value='',onChange=()=>{})=>mountPlayerPicker(root.querySelector('#'+CSS.escape(id+'-picker')),{options,value,noun:'option',onChange});
+export function mountProfileEditor(root,user,{request,onSaved}){
+  root.innerHTML=`<form class="profile-editor">${identityInputs('edit-'+user.id,user)}<p class="access-help">Changes also update their linked roster profile. A username change changes what they enter to sign in.</p><div class="form-error" role="alert"></div><button class="button secondary" type="submit">Save profile</button></form>`;
+  root.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');button.disabled=true;try{await request('/api/profiles/'+user.id,{method:'PUT',body:readIdentity(form,user)});await onSaved();}catch(error){form.querySelector('.form-error').textContent=error.message;}finally{button.disabled=false;}};
+}

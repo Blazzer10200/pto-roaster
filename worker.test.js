@@ -73,12 +73,27 @@ test('migrated leader signs in from Pages; unauthorized origins cannot read or p
  const logout=await call(env,'/api/auth/logout',{}, {token});assert.equal(logout.status,200);
  assert.equal((await call(env,'/api/ledger',undefined,{token})).status,401);
 });
+test('remembered Pages cookies restore sessions, expire, and respect logout and origin boundaries',async t=>{
+ const env=await initialized(t),start=Date.now();
+ const signed=await call(env,'/api/auth/login',{username:'leader',password,remember:true});assert.equal(signed.status,200);
+ const cookie=signed.headers.get('set-cookie');assert.match(cookie,/Secure; HttpOnly; SameSite=None; Partitioned; Path=\/; Max-Age=2592000/);
+ assert.equal(signed.headers.get('Access-Control-Allow-Credentials'),'true');
+ const options={headers:{Cookie:cookie.split(';')[0]}};
+ const session=await (await call(env,'/api/session',undefined,options)).json();assert.equal(session.authenticated,true);assert.equal(session.user.remembered,true);
+ const state=JSON.parse(env.sql.prepare('SELECT document FROM pto_state').get().document);assert.ok(state.sessions[0].expires>=start+2592000000);assert.equal(state.sessions[0].remember,1);
+ const denied=await call(env,'/api/session',undefined,{...options,source:'https://evil.test'});assert.equal(denied.status,403);assert.equal(denied.headers.get('Access-Control-Allow-Credentials'),null);
+ const logout=await call(env,'/api/auth/logout',{},options);assert.match(logout.headers.get('set-cookie'),/Partitioned; Path=\/; Max-Age=0/);
+ assert.equal((await (await call(env,'/api/session',undefined,options)).json()).authenticated,false);
+ const ordinary=await call(env,'/api/auth/login',{username:'leader',password},{source:apiOrigin});assert.match(ordinary.headers.get('set-cookie'),/SameSite=Strict/);assert.doesNotMatch(ordinary.headers.get('set-cookie'),/Max-Age|Partitioned/);
+ const expired=JSON.parse(env.sql.prepare('SELECT document FROM pto_state').get().document);assert.ok(expired.sessions[0].expires<Date.now()+43200001);expired.sessions[0].expires=Date.now()-1;env.sql.prepare('UPDATE pto_state SET document=?').run(JSON.stringify(expired));
+ assert.equal((await (await call(env,'/api/session',undefined,{headers:{Cookie:ordinary.headers.get('set-cookie').split(';')[0]},source:apiOrigin})).json()).authenticated,false);
+});
 test('registration waits for approval; member reads are filtered and cannot save',async t=>{
  const env=await initialized(t),leader=await login(env);
- const registered=await call(env,'/api/auth/register',{username:'new.member',name:'New Member',password});assert.equal(registered.status,200);
+ const registered=await call(env,'/api/auth/register',{username:'new.member',name:'New Member',stateId:'01234',phone:'555-1234',password});assert.equal(registered.status,200);
  const member={token:registered.headers.get('X-PTO-Session')},u=(await registered.json()).user;
  assert.equal(u.approval,'pending');assert.equal((await call(env,'/api/ledger',undefined,member)).status,403);
- assert.equal((await call(env,'/api/requests/'+u.id,{decision:'approved',roleIds:['member']},leader)).status,200);
+ assert.equal((await call(env,'/api/requests/'+u.id,{decision:'approved',roleIds:['member'],profile:u,rank:'Prospect',revision:0},leader)).status,200);
  const loaded=await (await call(env,'/api/ledger',undefined,member)).json();assert.equal(loaded.data.purchases.length,0);assert.ok(loaded.data.members.length);
  assert.equal((await call(env,'/api/ledger',{data:loaded.data,revision:loaded.revision},{...member,method:'PUT'})).status,403);
  assert.equal((await call(env,'/api/access',undefined,member)).status,403);

@@ -13,7 +13,7 @@ const origin='http://127.0.0.1:4173',password='Development-Test-Password-123';
 const request=(path,method='GET',body,cookie='',otherOrigin=origin)=>new Request(origin+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body?{'Content-Type':'application/json',Origin:otherOrigin,'X-Bandbook-Request':'1'}:{})},...(body?{body:JSON.stringify(body)}:{})});
 const token=response=>response.headers.get('set-cookie').split(';')[0];
 async function ownerFixture(t){const api=createDevApi({seed:sampleData()});t.after(()=>api.close());const setup=await api.handle(request('/api/auth/setup','POST',{name:'Test Owner',email:'owner@example.test',password}));assert.equal(setup.status,200);return {api,ownerCookie:token(setup)};}
-async function addMember(api,ownerCookie){const response=await api.handle(request('/api/users','POST',{name:'Test Member',email:'member@example.test',password,roleIds:['member']},ownerCookie));assert.equal(response.status,201);const login=await api.handle(request('/api/auth/login','POST',{email:'member@example.test',password}));assert.equal(login.status,200);return token(login);}
+async function addMember(api,ownerCookie){const response=await api.handle(request('/api/users','POST',{name:'Test Member',email:'member@example.test',stateId:'10001',phone:'555-1001',password,roleIds:['member']},ownerCookie));assert.equal(response.status,201);const login=await api.handle(request('/api/auth/login','POST',{email:'member@example.test',stateId:'10001',phone:'555-1001',password}));assert.equal(login.status,200);return token(login);}
 test('first Owner setup is single-use, passwords are hashed, and sessions are HttpOnly',async t=>{
   const {api,ownerCookie}=await ownerFixture(t);
   assert.equal((await api.handle(request('/api/auth/setup','POST',{name:'Other',email:'other@example.test',password}))).status,409);
@@ -61,7 +61,7 @@ test('password changes invalidate previous sessions and failed logins are rate l
   assert.equal((await api.handle(request('/api/auth/login','POST',{email:'owner@example.test',password:'incorrect-password'}))).status,429);
 });
 async function register(api,username='newplayer',extra={}){
-  const response=await api.handle(request('/api/auth/register','POST',{username,name:'New Character',password,...extra}));
+  const response=await api.handle(request('/api/auth/register','POST',{username,name:'New Character',stateId:'01234',phone:'555-1234',password,...extra}));
   assert.equal(response.status,200);return {cookie:token(response),session:await response.json()};
 }
 test('self-registration cannot bypass approval or assign its own privileges',async t=>{
@@ -82,7 +82,7 @@ test('approval grants only selected roles and unlocks an existing pending sessio
   const path='/api/requests/'+session.user.id;
   assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:[]},ownerCookie))).status,400);
   assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['missing']},ownerCookie))).status,400);
-  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member']},ownerCookie))).status,200);
+  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member'],profile:session.user,rank:'Prospect',revision:0},ownerCookie))).status,200);
   const current=await (await api.handle(request('/api/session','GET',undefined,cookie))).json();
   assert.equal(current.user.approval,'approved');assert.deepEqual(current.user.roleIds,['member']);assert.equal(current.permissions.roster,'view');assert.equal(current.permissions.ledger,'none');
   assert.equal((await api.handle(request('/api/ledger','GET',undefined,cookie))).status,200);
@@ -97,24 +97,24 @@ test('declined accounts stay locked out and ordinary members cannot review reque
   assert.equal((await api.handle(request(path,'POST',{decision:'denied'},ownerCookie))).status,200);
   assert.equal((await api.handle(request('/api/ledger','GET',undefined,cookie))).status,403);
   const login=await api.handle(request('/api/auth/login','POST',{username:'newplayer',password}));assert.equal(login.status,200);assert.equal((await login.json()).user.approval,'denied');
-  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member']},ownerCookie))).status,409);
+  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member'],profile:session.user,rank:'Prospect',revision:0},ownerCookie))).status,409);
 });
 test('delegated reviewers can approve members without global administration but cannot escalate access',async t=>{
   const {api,ownerCookie}=await ownerFixture(t);
   const config=await (await api.handle(request('/api/access','GET',undefined,ownerCookie))).json();
-  config.roles.push({id:'reviewer',name:'Recruiter',color:'#4499ff',categories:{},pages:{roster:'view',requests:'manage'}});
+  config.roles.push({id:'reviewer',name:'Recruiter',color:'#4499ff',categories:{},pages:{roster:'manage',requests:'manage'}});
   assert.equal((await api.handle(request('/api/access','PUT',config,ownerCookie))).status,200);
-  assert.equal((await api.handle(request('/api/users','POST',{name:'Recruiter Character',username:'recruiter',password,roleIds:['reviewer']},ownerCookie))).status,201);
+  assert.equal((await api.handle(request('/api/users','POST',{name:'Recruiter Character',username:'recruiter',stateId:'10002',phone:'555-1002',password,roleIds:['reviewer']},ownerCookie))).status,201);
   const login=await api.handle(request('/api/auth/login','POST',{username:'recruiter',password})),reviewerCookie=token(login);
   assert.equal((await api.handle(request('/api/access','GET',undefined,reviewerCookie))).status,403);
   const {session}=await register(api),path='/api/requests/'+session.user.id;
   const queue=await (await api.handle(request('/api/requests','GET',undefined,reviewerCookie))).json();assert.ok(queue.roles.some(role=>role.id==='member'));assert.ok(!queue.roles.some(role=>role.id==='admin'));
   assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['admin']},reviewerCookie))).status,403);
-  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member']},reviewerCookie))).status,200);
+  assert.equal((await api.handle(request(path,'POST',{decision:'approved',roleIds:['member'],profile:session.user,rank:'Prospect',revision:0},reviewerCookie))).status,200);
 });
 test('registration validates credentials and rejects case-insensitive duplicate usernames',async t=>{
   const {api}=await ownerFixture(t);await register(api);
-  assert.equal((await api.handle(request('/api/auth/register','POST',{username:'NEWPLAYER',name:'Another Character',password}))).status,409);
-  for(const fields of [{username:'a'}, {username:'has spaces'}, {name:' '}, {password:'short'}])assert.equal((await api.handle(request('/api/auth/register','POST',{username:'validplayer',name:'Valid Character',password,...fields}))).status,400);
+  assert.equal((await api.handle(request('/api/auth/register','POST',{username:'NEWPLAYER',name:'Another Character',stateId:'01235',phone:'555-1235',password}))).status,409);
+  for(const fields of [{username:'a'}, {username:'has spaces'}, {name:' '}, {password:'short'}])assert.equal((await api.handle(request('/api/auth/register','POST',{username:'validplayer',name:'Valid Character',stateId:'01235',phone:'555-1235',password,...fields}))).status,400);
   assert.equal(api.db.prepare('SELECT count(*) AS count FROM users').get().count,2);
 });

@@ -59,9 +59,13 @@ export function validateBackup(data) {
   const members=data.members ?? [],ranks=data.ranks ?? [...defaultRanks],rosterLimit=data.rosterLimit ?? 0,gangNotes=data.gangNotes ?? '';
   if(!Array.isArray(members)||members.length>2000||!Array.isArray(ranks)||!ranks.length||ranks.length>30||ranks.some(r=>typeof r!=='string'||!r.trim()||r.length>40)||new Set(ranks).size!==ranks.length) throw new Error('Check the roster and rank names.');
   if(!Number.isSafeInteger(rosterLimit)||rosterLimit<0||rosterLimit>2000||typeof gangNotes!=='string'||gangNotes.length>4000) throw new Error('Check the roster limit and gang notes.');
+  const accountIds=new Set();
   for(const member of members) {
     identity(member);
-    if(typeof member.name!=='string'||!member.name.trim()||member.name.length>60||typeof member.rank!=='string'||!member.rank.trim()||member.rank.length>40||!['active','inactive','archived'].includes(member.status)||typeof member.callsign!=='string'||member.callsign.length>40||typeof member.notes!=='string'||member.notes.length>2000||!/^\d{4}-\d{2}-\d{2}$/.test(member.joined)||!Number.isFinite(Date.parse(member.joined))) throw new Error('Check member name, rank, status, and joined date.');
+    if(typeof member.name!=='string'||!member.name.trim()||member.name.length>60||typeof member.rank!=='string'||!member.rank.trim()||member.rank.length>40||!['active','inactive','archived'].includes(member.status)||(member.callsign!==undefined&&(typeof member.callsign!=='string'||member.callsign.length>40))||typeof member.notes!=='string'||member.notes.length>2000||!/^\d{4}-\d{2}-\d{2}$/.test(member.joined)||!Number.isFinite(Date.parse(member.joined))) throw new Error('Check member name, rank, status, and joined date.');
+    if(member.stateId!==undefined&&(typeof member.stateId!=='string'||(member.stateId!==''&&!/^\d{5}$/.test(member.stateId))))throw Error('State ID must be exactly five digits.');
+    if(member.phone!==undefined&&(typeof member.phone!=='string'||(member.phone!==''&&(!/^[+\d() .-]{3,30}$/.test(member.phone)||member.phone.replace(/\D/g,'').length<3))))throw Error('Check the in-game phone number.');
+    if(member.userId!==undefined){if(typeof member.userId!=='string'||!member.userId||accountIds.has(member.userId)||typeof member.username!=='string'||!/^[a-z0-9_.-]{3,32}$/.test(member.username)||!Number.isSafeInteger(member.profileRevision)||member.profileRevision<0)throw Error('Invalid or duplicate linked account.');accountIds.add(member.userId);}
   }
   return {...data,members,ranks,rosterLimit,gangNotes};
 }

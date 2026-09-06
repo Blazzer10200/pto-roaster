@@ -17,7 +17,7 @@ test('TOTP matches RFC 6238 SHA-1 vectors and rejects invalid or replayed codes'
 });
 test('concurrent login attempts are reserved and one username cannot lock out a different account',async t=>{
   const f=await fixture(t);
-  await f.api.handle(request('/api/users',{name:'Member',username:'member',password,roleIds:['member']},f.owner));
+  await f.api.handle(request('/api/users',{name:'Member',username:'member',stateId:'10001',phone:'555-1001',password,roleIds:['member']},f.owner));
   const attempts=await Promise.all(Array.from({length:12},()=>login(f.api,'member','bad-password')));
   assert.ok(attempts.filter(r=>r.status===429).length>=4);
   assert.equal((await login(f.api,'member')).status,429);
@@ -38,8 +38,8 @@ test('enrollment encrypts the secret, revokes old sessions and requires a one-ti
 });
 test('admin policy gates unenrolled administrators without blocking ordinary members or logout',async t=>{
   const f=await fixture(t);
-  await f.api.handle(request('/api/users',{name:'Other Admin',username:'admin',password,roleIds:['admin']},f.owner));
-  await f.api.handle(request('/api/users',{name:'Member',username:'member',password,roleIds:['member']},f.owner));
+  await f.api.handle(request('/api/users',{name:'Other Admin',username:'admin',stateId:'10002',phone:'555-1002',password,roleIds:['admin']},f.owner));
+  await f.api.handle(request('/api/users',{name:'Member',username:'member',stateId:'10001',phone:'555-1001',password,roleIds:['member']},f.owner));
   assert.equal((await f.api.handle(request('/api/security/policy',{currentPassword:password,requireAdminMfa:true},f.owner))).status,400);
   const enrolled=await enroll(f);f.tick();
   assert.equal((await f.api.handle(request('/api/security/policy',{currentPassword:password,code:totp(enrolled.secret,f.now()),requireAdminMfa:true},enrolled.cookie))).status,200);
@@ -59,6 +59,17 @@ test('recovery codes are hashed, reset credentials once, and revoke MFA and all 
   assert.equal((await f.api.handle(request('/api/auth/recover',{...body,recoveryCode:enrolled.recoveryCodes[1]}))).status,401);
   const fresh=await login(f.api,'owner',replacement);assert.equal(fresh.status,200);assert.equal((await fresh.json()).security.mfaEnabled,false);
 });
+test('remembered local login survives cookie-only reload and MFA, then expires or revokes',async t=>{
+  const f=await fixture(t);
+  const remembered=await f.api.handle(request('/api/auth/login',{username:'owner',password,remember:true}));assert.match(remembered.headers.get('set-cookie'),/HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000/);
+  const c=cookie(remembered);assert.equal((await (await f.api.handle(request('/api/session',undefined,c))).json()).user.remembered,true);
+  const enrolled=await enroll(f,c);assert.equal(enrolled.session.user.remembered,true);
+  const response=await f.api.handle(request('/api/auth/login',{username:'owner',password,remember:true})),challenge=await response.json();f.tick();
+  const signed=await f.api.handle(request('/api/auth/mfa',{challenge:challenge.challenge,code:totp(enrolled.secret,f.now())}));assert.equal(signed.status,200);assert.match(signed.headers.get('set-cookie'),/Max-Age=2592000/);
+  assert.equal((await (await f.api.handle(request('/api/session',undefined,cookie(signed)))).json()).user.remembered,true);
+  await f.api.handle(request('/api/auth/logout',{},cookie(signed)));assert.equal((await f.api.handle(request('/api/ledger',undefined,cookie(signed)))).status,401);
+  f.api.db.prepare('UPDATE sessions SET expires=?').run(f.now()-1);assert.equal((await (await f.api.handle(request('/api/session',undefined,enrolled.cookie))).json()).authenticated,false);
+});
 test('expired MFA challenges cannot create sessions',async t=>{
   const f=await fixture(t),enrolled=await enroll(f),challenge=await (await login(f.api)).json();for(let i=0;i<11;i++)f.tick();
   assert.equal((await f.api.handle(request('/api/auth/mfa',{challenge:challenge.challenge,code:totp(enrolled.secret,f.now())}))).status,401);
@@ -77,7 +88,7 @@ test('complete encrypted backups restore users, MFA, policy, data and audit but 
 });
 test('activity and full backups enforce permissions and never expose stored secrets in the activity feed',async t=>{
   const f=await fixture(t);
-  await f.api.handle(request('/api/users',{name:'Member',username:'member',password,roleIds:['member']},f.owner));
+  await f.api.handle(request('/api/users',{name:'Member',username:'member',stateId:'10001',phone:'555-1001',password,roleIds:['member']},f.owner));
   const member=cookie(await login(f.api,'member'));
   assert.equal((await f.api.handle(request('/api/audit',undefined,member))).status,403);
   assert.equal((await f.api.handle(request('/api/security/backup',{currentPassword:password,passphrase:'long enough backup phrase'},member))).status,403);

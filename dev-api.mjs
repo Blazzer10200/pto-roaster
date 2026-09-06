@@ -4,19 +4,21 @@ import {promisify} from 'node:util';
 import {createSecurity,securitySchema} from './security-store.mjs';
 import {freshData,validateBackup} from './model.js';
 import {onlineUsers} from './presence.js';
+import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
+import {changeVersions} from './change-versions.js';
 import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
 const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
-const publicUser=user=>({id:user.id,name:user.name,username:user.username,owner:!!user.owner,disabled:!!user.disabled,approval:user.approval,requestedAt:user.requested_at,reviewedAt:user.reviewed_at,roleIds:JSON.parse(user.roles),mfaVerified:!!user.mfa_verified});
+const publicUser=user=>({id:user.id,...profileOf(user),owner:!!user.owner,disabled:!!user.disabled,approval:user.approval,requestedAt:user.requested_at,reviewedAt:user.reviewed_at,roleIds:JSON.parse(user.roles),mfaVerified:!!user.mfa_verified,remembered:!!user.session_remember});
 async function hashPassword(password,salt=randomBytes(16).toString('hex')){return salt+':'+Buffer.from(await scrypt(password,salt,64,{N:32768,r:8,p:3,maxmem:64*1024*1024})).toString('hex');}
 async function verifyPassword(password,stored){const [salt,hash]=stored.split(':');const result=await hashPassword(password,salt);return timingSafeEqual(Buffer.from(result.split(':')[1],'hex'),Buffer.from(hash,'hex'));}
 const validatePassword=value=>{if(typeof value!=='string'||value.length<12||value.length>128)throw Error('Use a password between 12 and 128 characters.');};
-function accountFields(body){
+function accountFields(body,required=true){
   const name=typeof body.name==='string'?body.name.trim():'';
   const legacyEmail=typeof body.email==='string'?body.email.trim().toLowerCase():'';
   const username=typeof body.username==='string'?body.username.trim().toLowerCase():legacyEmail.split('@')[0];
   if(!name||name.length>60||!username||!/^[a-z0-9_.-]{3,32}$/.test(username))throw Error('Enter your in-character name and a username of 3–32 letters, numbers, dots, underscores, or hyphens.');
-  return {name,username,email:legacyEmail||crypto.randomUUID()+'@pto.invalid'};
+  return {...profileFields({...body,name,username},{required}),email:legacyEmail||crypto.randomUUID()+'@pto.invalid'};
 }
 export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,backupStatus=()=>({enabled:false})}={}){
   if(!key&&file!==':memory:')throw Error('A persistent encryption key is required for this database.');
@@ -32,13 +34,14 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
     CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,user_id TEXT NOT NULL,action TEXT NOT NULL,document TEXT);`);
   // Additive local migration preserves all existing accounts and passwords.
   const columns=new Set(db.prepare('PRAGMA table_info(users)').all().map(column=>column.name));
-  for(const [name,type] of Object.entries({username:'TEXT',approval:"TEXT NOT NULL DEFAULT 'approved'",requested_at:'TEXT',reviewed_at:'TEXT',reviewed_by:'TEXT'}))if(!columns.has(name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of Object.entries({username:'TEXT',approval:"TEXT NOT NULL DEFAULT 'approved'",requested_at:'TEXT',reviewed_at:'TEXT',reviewed_by:'TEXT',stateId:"TEXT NOT NULL DEFAULT ''",phone:"TEXT NOT NULL DEFAULT ''",profileRevision:'INTEGER NOT NULL DEFAULT 0'}))if(!columns.has(name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
   for(const row of db.prepare('SELECT id,email FROM users WHERE username IS NULL').all()){
     let username=row.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_.-]/g,'').slice(0,24);if(username.length<3)username='user';
     if(db.prepare('SELECT id FROM users WHERE username=?').get(username))username+='-'+row.id.slice(0,6);
     db.prepare('UPDATE users SET username=? WHERE id=?').run(username,row.id);
   }
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS unique_username ON users(username COLLATE NOCASE)');
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_state_id ON users(stateId) WHERE stateId<>''");
   db.prepare('INSERT OR IGNORE INTO config VALUES(1,?)').run(JSON.stringify(initialAccess()));
   const existingConfig=JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
   if(!existingConfig.categories.some(category=>category.pages.includes('requests'))){
@@ -51,17 +54,20 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
   securitySchema(db);
   const config=()=>JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
   const rawLedger=()=>{const row=db.prepare('SELECT * FROM workspace WHERE id=1').get();return {data:validateBackup(JSON.parse(row.document)),revision:row.revision};};
+  const allUsers=()=>db.prepare('SELECT * FROM users').all();
+  const writeProfile=u=>db.prepare('UPDATE users SET name=?,username=?,stateId=?,phone=?,profileRevision=? WHERE id=?').run(u.name,u.username,u.stateId,u.phone,u.profileRevision,u.id);
+  const writeMembers=(data,revision)=>db.prepare('UPDATE workspace SET document=?,revision=? WHERE id=1').run(JSON.stringify(data),revision+1);
   const audit=(id,action,document=null)=>db.prepare('INSERT INTO audit(at,user_id,action,document) VALUES(?,?,?,?)').run(new Date().toISOString(),id,action,document);
   const cookieToken=request=>(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('pto_session='))?.slice(12)||'';
   const auth=request=>{
-    const session=db.prepare('SELECT users.*,sessions.mfa_verified FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.hash=? AND sessions.expires>? AND users.disabled=0').get(digest(cookieToken(request)),Date.now());
+    const session=db.prepare('SELECT users.*,sessions.mfa_verified,sessions.remember AS session_remember FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.hash=? AND sessions.expires>? AND users.disabled=0').get(digest(cookieToken(request)),now());
     return session?publicUser(session):null;
   };
-const sessionData=user=>{const permissions=permissionsFor(user,config());return {authenticated:true,user,security:security.state(user),roles:config().roles.filter(role=>user.roleIds.includes(role.id)).map(({id,name,color})=>({id,name,color})),permissions,categories:user.approval==='approved'?config().categories:[],pendingRequests:permits(permissions,'requests')?db.prepare("SELECT count(*) AS count FROM users WHERE approval='pending'").get().count:0,development:true};};
-  const newSession=(user,verified=false)=>{
-    db.prepare('DELETE FROM sessions WHERE expires<=?').run(Date.now());
-    const token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO sessions(hash,user_id,expires,mfa_verified) VALUES(?,?,?,?)').run(digest(token),user.id,Date.now()+12*60*60*1000,Number(verified));
-    return json(sessionData({...user,mfaVerified:verified}),200,{'Set-Cookie':`pto_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`});
+const sessionData=user=>{const access=config(),permissions=permissionsFor(user,access);return {authenticated:true,user,security:security.state(user),roles:access.roles.filter(role=>user.roleIds.includes(role.id)).map(({id,name,color})=>({id,name,color})),permissions,categories:user.approval==='approved'?access.categories:[],pendingRequests:permits(permissions,'requests')?db.prepare("SELECT count(*) AS count FROM users WHERE approval='pending'").get().count:0,versions:changeVersions({user,permissions,users:allUsers(),workspaceRevision:db.prepare('SELECT revision FROM workspace WHERE id=1').get().revision,accessRevision:access.revision,auditRevision:db.prepare('SELECT COALESCE(MAX(id),0) AS revision FROM audit').get().revision}),development:true};};
+  const newSession=(user,verified=false,remember=!!user.remembered)=>{
+    db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
+    const token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO sessions(hash,user_id,expires,mfa_verified,remember) VALUES(?,?,?,?,?)').run(digest(token),user.id,now()+(remember?2592000000:43200000),Number(verified),Number(remember));
+    return json(sessionData({...user,mfaVerified:verified,remembered:remember}),200,{'Set-Cookie':`pto_session=${token}; HttpOnly; SameSite=Strict; Path=/${remember?'; Max-Age=2592000':''}`});
   };
   const snapshot=()=>({format:'pto-full-backup',version:1,createdAt:new Date().toISOString(),key:key.toString('base64'),tables:Object.fromEntries(['users','config','workspace','audit','account_security','recovery_codes','security_policy'].map(table=>[table,db.prepare('SELECT * FROM '+table).all().map(row=>table==='account_security'?{...row,pending:null,pending_until:null}:row)]))});
   const security=createSecurity({db,key,auth,publicUser,newSession,config,audit,digest,verifyPassword,hashPassword,validatePassword,json,snapshot,now,backupStatus});
@@ -84,12 +90,12 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
       user=auth(request);
       if(route==='/api/auth/setup'&&method==='POST'){
         if(db.prepare('SELECT id FROM users LIMIT 1').get())return json({error:'The Owner account is already set up.'},409);
-        security.limit('setup:'+remoteAddress,5);const fields=accountFields(body);validatePassword(body.password);const password=await security.work(()=>hashPassword(body.password));
+        security.limit('setup:'+remoteAddress,5);const fields=accountFields(body,false);validatePassword(body.password);const password=await security.work(()=>hashPassword(body.password));
         db.exec('BEGIN IMMEDIATE');
         try{
           if(db.prepare('SELECT id FROM users LIMIT 1').get()){db.exec('ROLLBACK');return json({error:'The Owner account is already set up.'},409);}
-          const id=crypto.randomUUID();db.prepare("INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,1,?,'approved')").run(id,fields.name,fields.email,fields.username,password,'[]');audit(id,'Owner account created');db.exec('COMMIT');
-          return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)));
+          const id=crypto.randomUUID();db.prepare("INSERT INTO users(id,name,email,username,password,stateId,phone,owner,roles,approval) VALUES(?,?,?,?,?,?,?,1,?,'approved')").run(id,fields.name,fields.email,fields.username,password,fields.stateId,fields.phone,'[]');audit(id,'Owner account created');db.exec('COMMIT');
+          return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)),false,body.remember===true);
         }catch(error){if(db.isTransaction)db.exec('ROLLBACK');throw error;}
       }
       if(route==='/api/auth/register'&&method==='POST'){
@@ -97,9 +103,11 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
         security.limit('register:'+remoteAddress,10);
         const fields=accountFields(body);validatePassword(body.password);
         if(db.prepare('SELECT id FROM users WHERE username=? COLLATE NOCASE').get(fields.username))return json({error:'That username is already taken.'},409);
+        uniqueProfile(allUsers(),fields);
         const password=await security.work(()=>hashPassword(body.password)),id=crypto.randomUUID();
-        db.prepare("INSERT INTO users(id,name,email,username,password,roles,approval,requested_at) VALUES(?,?,?,?,?,?,'pending',?)").run(id,fields.name,fields.email,fields.username,password,'[]',new Date().toISOString());
-        audit(id,'Account approval requested');return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)));
+        uniqueProfile(allUsers(),fields);
+        db.prepare("INSERT INTO users(id,name,email,username,password,stateId,phone,roles,approval,requested_at) VALUES(?,?,?,?,?,?,?,?,'pending',?)").run(id,fields.name,fields.email,fields.username,password,fields.stateId,fields.phone,'[]',new Date().toISOString());
+        audit(id,'Account approval requested');return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)),false,body.remember===true);
       }
       if(route==='/api/auth/login'&&method==='POST'){
         const login=typeof (body.username??body.email)==='string'?(body.username??body.email).trim().toLowerCase():'';
@@ -108,8 +116,8 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
         const valid=typeof body.password==='string'&&body.password.length<=128&&await security.work(()=>verifyPassword(body.password,row?.password||'00000000000000000000000000000000:'+ '00'.repeat(64)));
         const current=row&&db.prepare('SELECT * FROM users WHERE id=?').get(row.id);
         if(!valid||!current||current.disabled||current.password!==row.password){if(current)audit(current.id,'Failed sign-in');return json({error:'Username or password is incorrect, or the account is disabled.'},401);}
-        security.clear(bucket);if(security.enabled(current.id))return security.challenge(current);
-        audit(current.id,'Signed in');return newSession(publicUser(current));
+        security.clear(bucket);if(security.enabled(current.id))return security.challenge(current,body.remember===true);
+        audit(current.id,'Signed in');return newSession(publicUser(current),false,body.remember===true);
       }
       if(!user)return json({error:'Sign in to continue.'},401);
       const permissions=permissionsFor(user,config());
@@ -122,6 +130,13 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
         db.prepare('UPDATE users SET password=? WHERE id=?').run(password,user.id);security.revoke(user.id);audit(user.id,'Password changed');return newSession(user,security.enabled(user.id));
       }
       if(user.approval!=='approved')return json({error:user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.'},403);
+      if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
+        const current=rawLedger(),proposal=memberRequest({route,method,body,users:allUsers(),...current,permissions,actor:user});
+        if(proposal){
+          if(proposal.action){db.exec('BEGIN IMMEDIATE');try{if(proposal.user)writeProfile(proposal.user);if(proposal.nextData)writeMembers(proposal.nextData,current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}
+          return json(proposal.payload);
+        }
+      }
       if(route==='/api/presence'){
         if(method==='GET'){
           if(!permits(permissions,'access','manage'))return json({error:'Account administration permission required.'},403);
@@ -138,12 +153,17 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
       if(route==='/api/requests'&&method==='GET'){
         if(!permits(permissions,'requests'))return json({error:'Join request access required.'},403);
         const assignableRoles=config().roles.filter(role=>{const grants=permissionsFor({roleIds:[role.id]},config());return accessPages.every(page=>accessLevels.indexOf(grants[page.id])<=accessLevels.indexOf(permissions[page.id]));});
-        return json({requests:db.prepare("SELECT * FROM users WHERE approval IN ('pending','denied') ORDER BY requested_at").all().map(publicUser),roles:assignableRoles});
+        const current=rawLedger();return json({requests:db.prepare("SELECT * FROM users WHERE approval IN ('pending','denied') ORDER BY requested_at").all().map(publicUser),roles:assignableRoles,ranks:current.data.ranks,revision:current.revision,unlinkedMembers:permits(permissions,'roster','manage')?current.data.members.filter(m=>!m.userId).map(({id,name,rank})=>({id,name,rank})):[]});
       }
       if(route.startsWith('/api/requests/')&&method==='POST'){
         if(!permits(permissions,'requests','manage'))return json({error:'Join request management permission required.'},403);
         const target=db.prepare('SELECT * FROM users WHERE id=?').get(route.slice('/api/requests/'.length));
         if(!target||target.owner)return json({error:'Request not found.'},404);
+        if(body.decision==='reopen'){
+          if(target.approval!=='denied')return json({error:'Only declined requests can be reopened. Refresh the queue.'},409);
+          db.prepare("UPDATE users SET approval='pending',roles='[]',requested_at=?,reviewed_at=NULL,reviewed_by=NULL WHERE id=?").run(new Date().toISOString(),target.id);
+          audit(user.id,'Account request reopened: '+target.name);return json({ok:true});
+        }
         if(!['approved','denied'].includes(body.decision))throw Error('Choose approve or decline.');
         if(target.approval!=='pending')return json({error:'This request was already reviewed. Refresh the queue.'},409);
         const roleIds=body.decision==='approved'?body.roleIds:[];assertRoles(roleIds);
@@ -152,8 +172,17 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
           const grants=permissionsFor({roleIds},config());
           if(accessPages.some(page=>accessLevels.indexOf(grants[page.id])>accessLevels.indexOf(permissions[page.id])))return json({error:'You can only grant permissions within your own access.'},403);
         }
-        db.prepare('UPDATE users SET approval=?,roles=?,reviewed_at=?,reviewed_by=? WHERE id=?').run(body.decision,JSON.stringify(roleIds),new Date().toISOString(),user.id,target.id);
-        audit(user.id,'Account request '+body.decision+': '+target.name,JSON.stringify({targetId:target.id,roleIds}));return json({ok:true});
+        const current=rawLedger();let profile,nextData;
+        if(body.decision==='approved'){
+          if(!permits(permissions,'roster','manage'))return json({error:'Roster management is also required to approve and add a member.'},403);
+          profile=updatedProfile(allUsers(),target,body.profile,user,{review:!permits(permissions,'access','manage')});
+          nextData=attachMember(current.data,allUsers(),{...profile,approval:'approved'},body,current.revision);
+        }
+        db.exec('BEGIN IMMEDIATE');try{
+          if(profile)writeProfile(profile);if(nextData)writeMembers(nextData,current.revision);
+          db.prepare('UPDATE users SET approval=?,roles=?,reviewed_at=?,reviewed_by=? WHERE id=?').run(body.decision,JSON.stringify(roleIds),new Date().toISOString(),user.id,target.id);
+          audit(user.id,'Account request '+body.decision+': '+target.name,JSON.stringify({targetId:target.id,roleIds}));db.exec('COMMIT');
+        }catch(error){db.exec('ROLLBACK');throw error;}return json({ok:true});
       }
       if(route==='/api/access'){
         if(!permits(permissions,'access',method==='GET'?'view':'manage'))return json({error:'Only access managers can manage roles and accounts.'},403);
@@ -167,11 +196,12 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
       if(route==='/api/users'&&method==='POST'){
         if(!permits(permissions,'access','manage'))return json({error:'Access manager permission required.'},403);
         const fields=accountFields(body);validatePassword(body.password);assertRoles(body.roleIds);
+        uniqueProfile(allUsers(),fields);
         if(db.prepare('SELECT id FROM users WHERE email=?').get(fields.email))throw Error('An account already uses that email.');
         const password=await security.work(()=>hashPassword(body.password)),id=crypto.randomUUID();
         // Re-check after password hashing in case this manager was revoked.
         const fresh=auth(request);if(!fresh||security.state(fresh).enrollmentRequired||!permits(permissionsFor(fresh,config()),'access','manage'))return json({error:'Your access changed. Sign in again.'},403);
-        assertRoles(body.roleIds);db.prepare("INSERT INTO users(id,name,email,username,password,roles,approval) VALUES(?,?,?,?,?,?,'approved')").run(id,fields.name,fields.email,fields.username,password,JSON.stringify(body.roleIds));audit(user.id,'Account created: '+id);return json({ok:true},201);
+        assertRoles(body.roleIds);uniqueProfile(allUsers(),fields);db.prepare("INSERT INTO users(id,name,email,username,password,stateId,phone,roles,approval) VALUES(?,?,?,?,?,?,?,?,'approved')").run(id,fields.name,fields.email,fields.username,password,fields.stateId,fields.phone,JSON.stringify(body.roleIds));audit(user.id,'Account created: '+id);return json({ok:true},201);
       }
       if(route.startsWith('/api/users/')&&method==='PUT'){
         if(!permits(permissions,'access','manage'))return json({error:'Access manager permission required.'},403);
@@ -191,7 +221,7 @@ const sessionData=user=>{const permissions=permissionsFor(user,config());return 
           if(!['roster','bands','ledger','settings'].some(page=>permits(permissions,page,'manage')))return json({error:'Your roles have view access only.'},403);
           if(!Number.isSafeInteger(body.revision)||body.revision!==current.revision)return json({error:'Records changed. Reload before saving.',conflict:true},409);
           const incoming=validateBackup(body.data);let next;
-          try{next=validateBackup(mergeAuthorizedData(current.data,incoming,permissions));}catch(error){return json({error:error.message},403);}
+          try{next=validateBackup(mergeAuthorizedData(current.data,incoming,permissions));assertLinkedMembers(current.data,next,allUsers());}catch(error){return json({error:error.message},403);}
           db.exec('BEGIN IMMEDIATE');try{db.prepare('UPDATE workspace SET document=?,revision=? WHERE id=1').run(JSON.stringify(next),current.revision+1);audit(user.id,'Workspace updated',JSON.stringify(current.data));db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}
           return json({data:visibleData(next,permissions),revision:current.revision+1});
         }

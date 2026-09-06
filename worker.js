@@ -3,6 +3,7 @@ export const handleApi=handleCloudApi;
 function cors(request,response){
   if(request.headers.get('origin')===githubOrigin){
     response.headers.set('Access-Control-Allow-Origin',githubOrigin);
+    response.headers.set('Access-Control-Allow-Credentials','true');
     response.headers.set('Vary','Origin');
     response.headers.set('Access-Control-Allow-Methods','GET, POST, PUT, OPTIONS');
     response.headers.set('Access-Control-Allow-Headers','Content-Type, X-Bandbook-Request, Authorization');

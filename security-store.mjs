@@ -11,6 +11,7 @@ export function securitySchema(db){
     CREATE TABLE IF NOT EXISTS security_policy(id INTEGER PRIMARY KEY,require_admin_mfa INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO security_policy VALUES(1,0);`);
   if(!db.prepare('PRAGMA table_info(sessions)').all().some(c=>c.name==='mfa_verified'))db.exec('ALTER TABLE sessions ADD COLUMN mfa_verified INTEGER NOT NULL DEFAULT 0');
+  for(const table of ['sessions','login_challenges'])if(!db.prepare('PRAGMA table_info('+table+')').all().some(c=>c.name==='remember'))db.exec('ALTER TABLE '+table+' ADD COLUMN remember INTEGER NOT NULL DEFAULT 0');
 }
 export function createSecurity({db,key,auth,publicUser,newSession,config,audit,digest,verifyPassword,hashPassword,validatePassword,json,snapshot,now=Date.now,backupStatus}){
   let cryptoJobs=0;
@@ -42,7 +43,7 @@ export function createSecurity({db,key,auth,publicUser,newSession,config,audit,d
     if(factor&&enabled(user.id)&&consumeTotp(user.id,body.code)===false)throw failure('Enter a fresh six-digit authenticator code.');
     return fresh;
   }
-  function challenge(user){const token=randomBytes(32).toString('base64url');db.prepare('DELETE FROM login_challenges WHERE expires<=? OR user_id=?').run(now(),user.id);db.prepare('INSERT INTO login_challenges VALUES(?,?,?,?)').run(digest(token),user.id,now()+300000,db.prepare('SELECT password FROM users WHERE id=?').get(user.id).password);return json({mfaRequired:true,challenge:token});}
+  function challenge(user,remember=false){const token=randomBytes(32).toString('base64url');db.prepare('DELETE FROM login_challenges WHERE expires<=? OR user_id=?').run(now(),user.id);db.prepare('INSERT INTO login_challenges(hash,user_id,expires,password_version,remember) VALUES(?,?,?,?,?)').run(digest(token),user.id,now()+300000,db.prepare('SELECT password FROM users WHERE id=?').get(user.id).password,Number(remember));return json({mfaRequired:true,challenge:token});}
   async function handle(request,body,user,source){const {pathname:route,searchParams}=new URL(request.url),method=request.method;
     if(route==='/api/auth/mfa'&&method==='POST'){
       limit('ip:'+source,120);const record=db.prepare('SELECT * FROM login_challenges WHERE hash=? AND expires>?').get(digest(String(body.challenge||'')),now());
@@ -50,7 +51,7 @@ export function createSecurity({db,key,auth,publicUser,newSession,config,audit,d
       const target=db.prepare('SELECT * FROM users WHERE id=?').get(record.user_id);
       if(!target||target.disabled||target.password!==record.password_version)throw failure('This sign-in expired. Start again.',401);
       if(!enabled(target.id)||consumeTotp(target.id,body.code)===false)throw failure('That code is invalid or already used. Try a fresh code.',401);
-      db.prepare('DELETE FROM login_challenges WHERE hash=?').run(record.hash);clear('factor:'+target.id);audit(target.id,'Signed in with two-factor');return newSession(publicUser(target),true);
+      db.prepare('DELETE FROM login_challenges WHERE hash=?').run(record.hash);clear('factor:'+target.id);audit(target.id,'Signed in with two-factor');return newSession(publicUser(target),true,!!record.remember);
     }
     if(route==='/api/auth/recover'&&method==='POST'){
       limit('ip:'+source,120);const login=String(body.username||'').trim().toLowerCase();const target=db.prepare('SELECT * FROM users WHERE username=? COLLATE NOCASE OR email=?').get(login,login);
@@ -73,13 +74,13 @@ export function createSecurity({db,key,auth,publicUser,newSession,config,audit,d
     if(route==='/api/security/confirm'&&method==='POST'){
       limit('factor:'+user.id);const step=consumeTotp(user.id,body.code,true);if(step===false)throw failure('That code did not match. Check your authenticator or restart setup.');
       db.prepare('UPDATE account_security SET secret=pending,pending=NULL,pending_until=NULL,last_step=? WHERE user_id=?').run(step,user.id);const recoveryCodes=codes(user.id);revoke(user.id);audit(user.id,'Two-factor enabled');
-      const response=newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)),true);return json({session:await response.json(),recoveryCodes},200,{'Set-Cookie':response.headers.get('set-cookie')});
+      const response=newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)),true,user.remembered);return json({session:await response.json(),recoveryCodes},200,{'Set-Cookie':response.headers.get('set-cookie')});
     }
     if(route==='/api/security/recovery-codes'&&method==='POST'){
       await reauthenticate(request,body,user);const recoveryCodes=codes(user.id);audit(user.id,'Recovery codes regenerated');return json({recoveryCodes});
     }
     if(route==='/api/security/revoke'&&method==='POST'){
-      await reauthenticate(request,body,user);revoke(user.id);audit(user.id,'Other sessions signed out');return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)),enabled(user.id));
+      await reauthenticate(request,body,user);revoke(user.id);audit(user.id,'Other sessions signed out');return newSession(publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)),enabled(user.id),user.remembered);
     }
     if(route==='/api/security/policy'&&method==='POST'){
       if(!user.owner)throw failure('Only the Owner can change this requirement.',403);
