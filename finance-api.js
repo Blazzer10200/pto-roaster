@@ -27,7 +27,7 @@ export function financeRequest({route,method,body,data,revision,permissions,acto
     const id=requestId(body),old=finance.payouts.find(p=>p.id===id);if(old){if(old.userId!==body.userId||old.amount!==body.expectedOutstanding||!sameEntries(old.entryIds))fail('Payment ID already used.',409);return {payload:snapshot()};}
     const entries=finance.deposits.filter(e=>e.userId===body.userId&&e.status==='pending'),amount=outstanding(entries);
     if(!amount||amount!==body.expectedOutstanding||!sameEntries(entries.map(e=>e.id)))fail('These deposits changed or have already been paid. Refresh and review the current entries and amount.',409);
-    if(body.userId===actor.id)fail('Another finance manager must confirm your payout.',403);
+    if(body.userId===actor.id&&!actor.owner)fail('Another finance manager must confirm your payout.',403);
     finance.payouts.unshift({id,userId:body.userId,amount,entryIds:entries.map(e=>e.id),at,by:actor.id,byName:actor.name});for(const entry of entries){entry.status='paid';entry.payoutId=id;}
     action='Band payout confirmed: '+name(body.userId)+' — '+financeMoney(amount)+' across '+entries.length+' deposits';
   }else if(route.startsWith('/api/finance/deposits/')&&method==='POST'){

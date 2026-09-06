@@ -56,7 +56,7 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} finance: own depo
  assert.equal((await call('/api/finance/deposits/'+third.requestId,{body:{decision:'reject',reason:'Wrong count'}})).status,403);
  assert.equal((await call('/api/finance/deposits/'+third.requestId,{as:'manager',body:{decision:'reject',reason:'Please recount the stash'}})).status,200);
  own=(await call('/api/finance')).payload;assert.equal(own.deposits[0].reason,'Please recount the stash');assert.equal(outstanding(own.deposits),0);
- const ownerDeposit={...first,requestId:crypto.randomUUID()};await call('/api/finance/deposits',{as:'owner',body:ownerDeposit});assert.equal((await call('/api/finance/payouts',{as:'owner',body:{requestId:crypto.randomUUID(),userId:'owner',expectedOutstanding:50000,expectedEntryIds:[ownerDeposit.requestId]}})).status,403);
+ const managerDeposit={...first,requestId:crypto.randomUUID()};await call('/api/finance/deposits',{as:'manager',body:managerDeposit});assert.equal((await call('/api/finance/payouts',{as:'manager',body:{requestId:crypto.randomUUID(),userId:'manager',expectedOutstanding:50000,expectedEntryIds:[managerDeposit.requestId],owner:true}})).status,403);
  const bill={requestId:crypto.randomUUID(),kind:'house',dueDate:manager.startDate};assert.equal((await call('/api/finance/bills',{body:bill})).status,403);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'owner',body:{...bill,requestId:crypto.randomUUID()}})).status,409);
  const ledger=(await call('/api/ledger',{as:'owner'})).payload;assert.equal(ledger.data.finance,undefined);assert.equal((await call('/api/ledger',{as:'owner',method:'PUT',body:{...ledger,data:{...ledger.data,finance:emptyFinance()}}})).status,403);
  const originalRate=own.deposits[1].lines[0].price;ledger.data.bands[1].price=99900;assert.equal((await call('/api/ledger',{as:'owner',method:'PUT',body:ledger})).status,200);
@@ -115,6 +115,16 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} roster removal ke
  assert.equal((await call('/api/session')).payload.authenticated,true);
  const directory=(await call('/api/profiles',{as:'owner'})).payload;assert.equal(directory.users.find(u=>u.id==='member').memberId,null);
  assert.equal((await call('/api/members',{as:'owner',body:{userId:'member',profileRevision:0,revision:directory.revision,rank:'Member',joined:'2026-09-05'}})).status,200);
+});
+for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} Owner can confirm their own payout with normal history and duplicate protection`,async t=>{
+ const {call}=fixture(t,hosted),initial=(await call('/api/finance',{as:'owner'})).payload;
+ const id=crypto.randomUUID();await call('/api/finance/deposits',{as:'owner',body:{requestId:id,ratesVersion:initial.ratesVersion,lines:[{id:'band-1',quantity:8}],notes:''}});
+ const payment={requestId:crypto.randomUUID(),userId:'owner',expectedOutstanding:80000,expectedEntryIds:[id]};
+ assert.equal((await call('/api/finance/payouts',{as:'owner',body:{...payment,expectedOutstanding:1}})).status,409);
+ const result=await call('/api/finance/payouts',{as:'owner',body:payment});assert.equal(result.status,200);assert.equal(outstanding(result.payload.deposits),0);assert.equal(result.payload.payouts[0].by,'owner');assert.equal(result.payload.deposits[0].status,'paid');
+ assert.equal((await call('/api/finance/payouts',{as:'owner',body:payment})).payload.payouts.length,1);
+ assert.equal((await call('/api/finance/payouts',{as:'owner',body:{...payment,requestId:crypto.randomUUID()}})).status,409);
+ assert.match(JSON.stringify((await call('/api/audit',{as:'owner'})).payload),/Band payout confirmed: Finance Owner/);
 });
 test('Thursday obligations cross weeks and Central-time midnight without erasing arrears',()=>{
  const f=emptyFinance(Date.parse('2026-09-09T15:00:00Z'));assert.equal(f.startDate,'2026-09-10');assert.equal(weeklyBills(f,Date.parse('2026-09-10T04:59:00Z'))[0].status,'upcoming');assert.equal(weeklyBills(f,Date.parse('2026-09-10T05:00:00Z'))[0].status,'due');
