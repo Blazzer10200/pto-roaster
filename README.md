@@ -6,7 +6,19 @@ A simple FiveM gang hub with a roster, customizable ranks, availability, gang no
 
 The home screen shows current, active, and inactive member counts. Invite members to create an account with their character name, username, five-digit State ID, and in-game phone number. Approve & add to roster creates a linked profile with a selected gang rank. Existing approved accounts can be added through Invite member → Add existing account, and old roster entries can be explicitly linked from Edit member. Linking preserves their rank, status, joined date, and notes. Callsign is no longer shown; historical callsigns remain in backups. Status is maintained manually; there is no live FiveM server connection. Archive departed members to retain their details without counting them against the roster limit; restore them by editing their status in Archive.
 
-Settings controls the gang name, ordered rank list, and roster limit (0 means unlimited). The limit is informational, not a hard block. Gang notes hold shared reminders. Roster members and band-account contacts are separate; recording someone's bands does not enroll them in the gang. Existing backups load with an empty roster and retain all purchase history.
+Settings controls the gang name, ordered rank list, and roster limit (0 means unlimited). The limit is informational, not a hard block. Gang notes hold shared reminders. Approved accounts submit their own bands; earlier ledger contacts remain separate from website accounts. Legacy backups without a roster load with an empty roster and retain their purchase history.
+
+## Bands and gang finances
+
+**Bands → My bands** uses the signed-in account automatically. Members enter quantities at the configured band rates and an optional stash note. The server supplies the account, rates, timestamp and unpaid status. Deposits accumulate in that member's outstanding balance; saved rates do not change when Settings rates change later.
+
+**Ledger → Finance ledger** shows the member payout queue and the two Thursday expenses: **$5,000 gang house + $5,000 gang taxes**, tracked in Central time. Tracking starts from the upcoming Thursday when finance tracking is first opened. Unpaid weeks carry forward; each weekly payment is unique by bill and Thursday. These are gang expenses, not automatically divided member dues, and the app records payments made in game rather than transferring money.
+
+Bands View allows submitting and viewing one's own deposits. Ledger View shows gang finances; Ledger Manage confirms payouts, rejects incorrect deposits with a reason, and records weekly payments. Another finance manager must confirm one's own payout. The default Member role gains Bands View once when it has no explicit Bands/category restriction; existing custom restrictions are respected. Recruiter roles must include the permissions of roles they grant, including Bands View when approving the default Member role.
+
+Confirm paid clears the member's pending deposits while retaining each entry and who confirmed payment. Member screens refresh automatically, including profile name changes. Payouts check both the displayed amount and the exact pending deposits so concurrent changes cannot silently pay different entries, even if the total stays the same. Request IDs prevent duplicate submissions/payments on retry. Incorrect entries retain the rejection reason in history.
+
+Earlier manual ledger records remain under **Earlier ledger records & outside players**. They are never matched to accounts by name. Full encrypted backups include account-linked deposits, payout history and weekly bills. The ordinary JSON export/restore covers roster and earlier ledger records; restoring it preserves the current account-linked finance history.
 
 ## Run locally
 
@@ -35,22 +47,18 @@ Open http://127.0.0.1:4173. Run `npm test` for the ledger calculation and backup
 
 ## First preview
 
-New workspaces start with an empty roster, no ledger players or transactions, blank gang notes, and unset band prices. Set actual prices in Settings. Test fixtures are separate modules excluded from published assets. Existing login accounts and permissions remain intact.
+New workspaces start with an empty roster, no ledger players or transactions, blank gang notes, and unset band prices. Set actual prices in Settings. Test fixtures are separate modules excluded from published assets. Existing login accounts remain intact; the one-time default Member permission update is described above.
 
 Features:
-- Drop-off entries: receive a player's bands now, leave the amount paid at zero, and track the full amount owed to that player.
-- Dashboard showing who is owed money, with each player's combined outstanding balance across visits.
-- Player-level payments automatically applied to their oldest unpaid entries first, with payment history preserved on each receipt.
-- One record-bands form beside the unpaid player list; no entry-type choice, charts, or period summaries.
-- Custom searchable player picker with arrow-key navigation, Enter to select, Escape to cancel, and click-away dismissal.
-- Quantity entry using prices from Settings, with optional payment and note fields tucked into an expandable section.
-- Contacts with notes, purchase histories, and outstanding balances.
-- Searchable purchase history and paid/open filters.
+- My bands: account-linked stash quantities, locked price snapshots, an optional note, and a running outstanding balance.
+- Finance ledger: member payout confirmations, rejection reasons, and permanent paid/reviewed history.
+- Thursday house and gang-tax tracking with unpaid weeks carried forward.
+- Earlier ledger contacts retain notes, purchase histories, searchable paid/open filters, and existing partial-payment controls.
 - Settings for workspace name and item names, colors, default prices, order, and visibility.
-- Backup export and validated backup restore with a replacement confirmation.
+- Ordinary roster/earlier-ledger exports and full encrypted backups including account-linked finances.
 - Original price snapshots retained in purchase history; amounts calculated in integer cents.
 
-All new records use the same band-entry flow, so an unpaid delivery is not counted twice when it is paid. Existing purchase and drop-off records and backups remain compatible. Quantities are individual band/item counts; no unstated stack-size conversion is assumed.
+New stash deposits remain the same records when paid and move from outstanding to history. Earlier purchase/drop-off records and backups remain compatible. Quantities are individual band/item counts; no unstated stack-size conversion is assumed.
 
 ## Public access and storage
 

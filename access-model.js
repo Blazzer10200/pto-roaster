@@ -1,6 +1,12 @@
 export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'Bands'},{id:'ledger',name:'Ledger'},{id:'settings',name:'Settings'},{id:'access',name:'Roles & access'},{id:'requests',name:'Join requests'}];
 export const accessLevels=['none','view','manage'];
-export function initialAccess(){return {revision:0,categories:[{id:'gang',name:'Gang',pages:['roster']},{id:'treasury',name:'Treasury',pages:['bands','ledger']},{id:'administration',name:'Administration',pages:['settings','access','requests']}],roles:[{id:'admin',name:'Admin',color:'#78b7ff',categories:{gang:'manage',treasury:'manage',administration:'manage'},pages:{}},{id:'member',name:'Member',color:'#a0a6b0',categories:{gang:'view'},pages:{}}]};}
+export function enableMemberBands(config){
+  if(config.financeAccessVersion===1)return false;
+  const member=config.roles.find(r=>r.id==='member'),category=config.categories.find(c=>c.pages.includes('bands'));
+  if(member&&member.pages.bands===undefined&&member.categories[category?.id]===undefined)member.pages.bands='view';
+  config.financeAccessVersion=1;config.revision++;return true;
+}
+export function initialAccess(){return {revision:0,financeAccessVersion:1,categories:[{id:'gang',name:'Gang',pages:['roster']},{id:'treasury',name:'Treasury',pages:['bands','ledger']},{id:'administration',name:'Administration',pages:['settings','access','requests']}],roles:[{id:'admin',name:'Admin',color:'#78b7ff',categories:{gang:'manage',treasury:'manage',administration:'manage'},pages:{}},{id:'member',name:'Member',color:'#a0a6b0',categories:{gang:'view'},pages:{bands:'view'}}]};}
 export function permissionsFor(user,config){
   const permissions=Object.fromEntries(accessPages.map(p=>[p.id,'none']));
   if(!user||user.disabled||(user.approval&&user.approval!=='approved'))return permissions;
@@ -27,9 +33,10 @@ export function validateAccess(config){
   return config;
 }
 export function visibleData(data,permissions){
-  return {version:data.version,name:data.name,members:permits(permissions,'roster')?data.members:[],gangNotes:permits(permissions,'roster')?data.gangNotes:'',ranks:permits(permissions,'roster')||permits(permissions,'settings')?data.ranks:['Member'],rosterLimit:permits(permissions,'roster')||permits(permissions,'settings')?data.rosterLimit:0,bands:permits(permissions,'bands')||permits(permissions,'settings')?data.bands:[],contacts:permits(permissions,'ledger')?data.contacts:permits(permissions,'bands')?data.contacts.map(c=>({id:c.id,name:c.name,notes:''})):[],purchases:permits(permissions,'ledger')?data.purchases:[]};
+  return {version:data.version,name:data.name,members:permits(permissions,'roster')?data.members:[],gangNotes:permits(permissions,'roster')?data.gangNotes:'',ranks:permits(permissions,'roster')||permits(permissions,'settings')?data.ranks:['Member'],rosterLimit:permits(permissions,'roster')||permits(permissions,'settings')?data.rosterLimit:0,bands:permits(permissions,'bands')||permits(permissions,'settings')?data.bands:[],contacts:permits(permissions,'ledger')?data.contacts:permits(permissions,'bands','manage')?data.contacts.map(c=>({id:c.id,name:c.name,notes:''})):[],purchases:permits(permissions,'ledger')?data.purchases:[]};
 }
 export function mergeAuthorizedData(current,incoming,permissions){
+  if(incoming.finance!==undefined&&JSON.stringify(incoming.finance)!==JSON.stringify(current.finance))throw Error('Use the finance controls to submit deposits and confirm payments.');
   const visible=visibleData(current,permissions),next={...current};
   const changed=field=>JSON.stringify(incoming[field])!==JSON.stringify(visible[field]);
   for(const [field,page] of Object.entries({name:'settings',members:'roster',gangNotes:'roster',ranks:'settings',rosterLimit:'settings',bands:'settings'})){

@@ -102,7 +102,7 @@ test('declined accounts stay locked out and ordinary members cannot review reque
 test('delegated reviewers can approve members without global administration but cannot escalate access',async t=>{
   const {api,ownerCookie}=await ownerFixture(t);
   const config=await (await api.handle(request('/api/access','GET',undefined,ownerCookie))).json();
-  config.roles.push({id:'reviewer',name:'Recruiter',color:'#4499ff',categories:{},pages:{roster:'manage',requests:'manage'}});
+  config.roles.push({id:'reviewer',name:'Recruiter',color:'#4499ff',categories:{},pages:{roster:'manage',requests:'manage',bands:'view'}});
   assert.equal((await api.handle(request('/api/access','PUT',config,ownerCookie))).status,200);
   assert.equal((await api.handle(request('/api/users','POST',{name:'Recruiter Character',username:'recruiter',stateId:'10002',phone:'555-1002',password,roleIds:['reviewer']},ownerCookie))).status,201);
   const login=await api.handle(request('/api/auth/login','POST',{username:'recruiter',password})),reviewerCookie=token(login);

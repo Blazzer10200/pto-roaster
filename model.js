@@ -1,3 +1,4 @@
+import {validateFinance} from './finance-model.js';
 export const cents = value => Math.round(Number(value) * 100);
 export const total = purchase => purchase.lines.reduce((sum, line) => sum + line.quantity * line.price, 0);
 export const paid = purchase => purchase.payments.reduce((sum, payment) => sum + payment.amount, 0);
@@ -41,6 +42,7 @@ export function rosterCounts(members, limit=0) {
   return {total:current.length,active:current.filter(m=>m.status==='active').length,inactive:current.filter(m=>m.status==='inactive').length,archived:members.length-current.length,open:limit?Math.max(0,limit-current.length):null};
 }
 export function validateBackup(data) {
+  if(data?.finance!==undefined)validateFinance(data.finance);
   if (!data || data.version !== 1 || typeof data.name !== 'string' || !data.name.trim() || data.name.length > 40 || !Array.isArray(data.bands) || !Array.isArray(data.contacts) || !Array.isArray(data.purchases)) throw new Error('This is not a valid PTO Roaster backup.');
   const ids = new Set();
   const identity = item => { if (!item || typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new Error('Invalid or duplicate record ID.'); ids.add(item.id); };

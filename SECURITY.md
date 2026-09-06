@@ -22,6 +22,10 @@ Two-factor is not enabled automatically on a real user's behalf. Existing local 
 
 ## Activity and backups
 
+Account-linked finances use dedicated server endpoints. Bands View permits only the signed-in account's submissions and personal history; Ledger View exposes the gang queue, and Ledger Manage permits payout/rejection and weekly-payment confirmations. Server-selected rates are frozen per deposit. A payout must match both the reviewed entry IDs and amount, and another manager must confirm their own payout. Unique request IDs and atomic commits prevent duplicate payment records. Paid/rejected entries retain actor and time; generic ledger writes cannot replace finance history.
+
+Full encrypted backups include account-linked deposits, payouts and weekly bills. The ordinary Settings JSON export covers roster and earlier ledger records; its restore preserves current account-linked finances.
+
 **Roles & access → Activity** is limited to account administrators. It displays actor, time, and account/workspace events, with pagination. Stored workspace snapshots and security details are not returned in this activity feed. This local database is not a tamper-proof external audit service.
 
 The server creates at most one encrypted daily snapshot under `.local/backups/` at startup or an hourly check while running. The Backups tab reports the snapshot time or an error. No automatic deletion/retention cleanup is configured. These snapshots require the original `.local/security.key`; keep that key private and backed up separately. Snapshots on the same drive do not protect against losing the computer.

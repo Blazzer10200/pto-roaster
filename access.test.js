@@ -15,7 +15,7 @@ test('categories must contain every page exactly once and levels fail closed',()
   const other=initialAccess();other.roles[0].pages.roster='god';assert.throws(()=>validateAccess(other));
 });
 test('hidden ledger and unknown fields never reach a roster-only viewer',()=>{
-  const data=sampleData();data.unexpectedSecret='hidden';const permissions=permissionsFor({roleIds:['member']},initialAccess());
+  const data=sampleData();data.unexpectedSecret='hidden';const config=initialAccess();config.roles.find(r=>r.id==='member').pages.bands='none';const permissions=permissionsFor({roleIds:['member']},config);
   const visible=visibleData(data,permissions);assert.equal(visible.purchases.length,0);assert.equal(visible.contacts.length,0);assert.equal(visible.bands.length,0);assert.equal(visible.members.length,4);assert.equal(visible.unexpectedSecret,undefined);
   assert.throws(()=>mergeAuthorizedData(data,{...visible,members:[]},permissions));
 });

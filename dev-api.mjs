@@ -6,6 +6,8 @@ import {freshData,validateBackup} from './model.js';
 import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
+import {financeRequest} from './finance-api.js';
+import {enableMemberBands} from './access-model.js';
 import {initialAccess,validateAccess,permissionsFor,permits,visibleData,mergeAuthorizedData,accessPages,accessLevels} from './access-model.js';
 const scrypt=promisify(scryptCallback),digest=value=>createHash('sha256').update(value).digest('hex');
 const json=(body,status=200,headers={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
@@ -44,6 +46,7 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS unique_state_id ON users(stateId) WHERE stateId<>''");
   db.prepare('INSERT OR IGNORE INTO config VALUES(1,?)').run(JSON.stringify(initialAccess()));
   const existingConfig=JSON.parse(db.prepare('SELECT document FROM config WHERE id=1').get().document);
+  if(enableMemberBands(existingConfig))db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(existingConfig));
   if(!existingConfig.categories.some(category=>category.pages.includes('requests'))){
     const category=existingConfig.categories.find(c=>c.pages.includes('access'))||existingConfig.categories[0];category.pages.push('requests');
     // Existing custom roles do not gain review permission merely through inheritance.
@@ -130,6 +133,10 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         db.prepare('UPDATE users SET password=? WHERE id=?').run(password,user.id);security.revoke(user.id);audit(user.id,'Password changed');return newSession(user,security.enabled(user.id));
       }
       if(user.approval!=='approved')return json({error:user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.'},403);
+      if(route.startsWith('/api/finance')){
+        const current=rawLedger(),proposal=financeRequest({route,method,body,data:current.data,revision:current.revision,permissions,actor:user,users:allUsers(),now:now()});
+        if(proposal){if(proposal.nextData){db.exec('BEGIN IMMEDIATE');try{writeMembers(validateBackup(proposal.nextData),current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}return json(proposal.payload);}
+      }
       if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
         const current=rawLedger(),proposal=memberRequest({route,method,body,users:allUsers(),...current,permissions,actor:user});
         if(proposal){
@@ -190,7 +197,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
         if(method==='PUT'){
           const next=validateAccess(body);if(next.revision!==config().revision)return json({error:'Access settings changed. Reload before saving.'},409);
           for(const row of db.prepare('SELECT roles FROM users').all())if(JSON.parse(row.roles).some(id=>!next.roles.some(r=>r.id===id)))throw Error('Reassign users before removing an assigned role.');
-          const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
+          const previousConfig=config();const clean={revision:next.revision+1,categories:next.categories,roles:next.roles,financeAccessVersion:1};db.prepare('UPDATE config SET document=? WHERE id=1').run(JSON.stringify(clean));audit(user.id,'Roles and categories updated',JSON.stringify({before:previousConfig,after:clean}));return json(clean);
         }
       }
       if(route==='/api/users'&&method==='POST'){

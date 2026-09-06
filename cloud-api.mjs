@@ -5,6 +5,8 @@ import {applyOwnerPasswordReset} from './owner-password-reset.mjs';
 import {onlineUsers} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
+import {financeRequest} from './finance-api.js';
+import {enableMemberBands} from './access-model.js';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import QRCodeSVG from 'qrcode/lib/renderer/svg-tag.js';
 import {validateBackup} from './model.js';
@@ -82,6 +84,7 @@ export async function handleCloudApi(request,env){
       const row=await first('SELECT * FROM pto_state WHERE id=1');
       if(!row)return route==='/api/session'?json({authenticated:false,setupRequired:false,development:false}):json({error:'The website is being prepared. Please try again shortly.'},503);
       const s=JSON.parse(row.document),before=row.document,events=[];let responseToken=null,responseRemember=false;
+      enableMemberBands(s.config);
       const audit=(id,action,document=null)=>{s.auditRevision=(s.auditRevision||0)+1;events.push({at:new Date(now).toISOString(),user_id:id,action,document});};
       const findUser=login=>s.users.find(u=>u.username.toLowerCase()===login||u.email===login);
       const auth=()=>{const session=s.sessions.find(x=>x.hash===digest(tokenOf(request))&&x.expires>now),u=session&&s.users.find(u=>u.id===session.user_id&&!u.disabled);return u?{...u,mfa_verified:session.mfa_verified,remembered:!!session.remember}:null;};
@@ -148,6 +151,10 @@ export async function handleCloudApi(request,env){
         if(enabled(user.id)&&!user.mfa_verified)return json({error:'Sign in again with your authenticator.',reauthenticate:true},401);
         if(user.approval!=='approved')fail(user.approval==='denied'?'Your account request was declined.':'Your account is awaiting approval.',403);
         const perms=permissions(user),requirePage=(p,l='view')=>{if(!permits(perms,p,l))fail('Your role does not have permission for this page.',403);};
+        if(route.startsWith('/api/finance')){
+          const proposal=financeRequest({route,method,body,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user,users:s.users,now});
+          if(proposal){if(proposal.nextData){s.workspace={id:1,revision:s.workspace.revision+1,document:JSON.stringify(validateBackup(proposal.nextData))};audit(user.id,proposal.action);}return json(proposal.payload);}
+        }
         if(route.startsWith('/api/profiles')||route.startsWith('/api/members')){
           const proposal=memberRequest({route,method,body,users:s.users,data:validateBackup(JSON.parse(s.workspace.document)),revision:s.workspace.revision,permissions:perms,actor:user});
           if(proposal){
@@ -187,7 +194,7 @@ export async function handleCloudApi(request,env){
         }
         if(route==='/api/access'){
           requirePage('access',method==='GET'?'view':'manage');if(method==='GET')return json({...s.config,users:s.users.map(publicUser)});
-          if(method==='PUT'){const next=validateAccess(body);if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');s.config={...next,revision:next.revision+1};audit(user.id,'Roles and categories updated');return json(s.config);}
+          if(method==='PUT'){const next=validateAccess(body);if(next.revision!==s.config.revision)fail('Access settings changed. Reload before saving.',409);for(const u of s.users)if(JSON.parse(u.roles).some(id=>!next.roles.some(r=>r.id===id)))fail('Reassign users before removing an assigned role.');s.config={...next,revision:next.revision+1,financeAccessVersion:1};audit(user.id,'Roles and categories updated');return json(s.config);}
         }
         if(route==='/api/users'&&method==='POST'){requirePage('access','manage');const f=fields(body);passwordValid(body.password);assertRoles(body.roleIds);const u=addUser(f,await hashPassword(body.password),body.roleIds,'approved');audit(user.id,'Account created: '+u.name);return json({ok:true},201);}
         if(route.startsWith('/api/users/')&&method==='PUT'){
