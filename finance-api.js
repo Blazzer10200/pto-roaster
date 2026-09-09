@@ -63,7 +63,7 @@ export function financeRequest({route,method,body,data,revision,permissions,acto
       action='Band deposit '+entry.status+': '+name(entry.userId)+' — '+entry.reason;
     }
   }else if(route==='/api/finance/bills'&&method==='POST'){
-    requireManage();const id=requestId(body),bill=weeklyBills(finance,now).find(b=>b.kind===body.kind&&b.dueDate===body.dueDate);
+    requireManage();if(body.kind==='house')fail('House payments are no longer tracked.');const id=requestId(body),bill=weeklyBills(finance,now).find(b=>b.kind===body.kind&&b.dueDate===body.dueDate);
     if(finance.bills.some(b=>b.id===id&&b.kind===body.kind&&b.dueDate===body.dueDate))return {payload:snapshot()};
     if(!bill||bill.status==='paid'||body.dueDate>nextThursday(financeDay(now)))fail('This weekly bill is unavailable or already paid.',409);
     if(body.expectedAmount!==undefined&&body.expectedAmount!==bill.amount)fail('The bill amount changed. Refresh and review it.',409);
@@ -88,7 +88,7 @@ export function financeRequest({route,method,body,data,revision,permissions,acto
     requireOwner();checkRevision();if(typeof body.requireVerification!=='boolean')fail('Choose whether new deposits require verification.');
     finance.requireVerification=body.requireVerification;
     if(body.startDate!==undefined&&body.startDate!==finance.startDate){if(finance.deposits.length||finance.bills.length)fail('Tracking has already started; its original start date is preserved.');if(!validFinanceDay(body.startDate)||nextThursday(body.startDate)!==body.startDate||body.startDate<'2020-01-01'||body.startDate>nextThursday(financeDay(now)))fail('Choose a valid Thursday tracking start.');finance.startDate=body.startDate;}
-    if(body.schedule){const s=body.schedule;if(!validFinanceDay(s.effectiveDate)||nextThursday(s.effectiveDate)!==s.effectiveDate||s.effectiveDate<=financeDay(now)||finance.bills.some(b=>b.dueDate>=s.effectiveDate))fail('Choose a future Thursday after any already-recorded bills.');amount(s.house);amount(s.taxes);if(!s.house&&!s.taxes)fail('At least one weekly amount must be positive.');finance.schedules=[...(finance.schedules||[]).filter(x=>x.effectiveDate!==s.effectiveDate),{effectiveDate:s.effectiveDate,house:s.house,taxes:s.taxes,...receipt}];}
+    if(body.schedule){const s=body.schedule;if(!validFinanceDay(s.effectiveDate)||nextThursday(s.effectiveDate)!==s.effectiveDate||s.effectiveDate<=financeDay(now)||finance.bills.some(b=>b.dueDate>=s.effectiveDate))fail('Choose a future Thursday after any already-recorded bills.');if(s.house!==undefined&&s.house!==0)fail('House payments are no longer tracked.');amount(s.taxes);if(!s.taxes)fail('The weekly tax amount must be positive.');finance.schedules=[...(finance.schedules||[]).filter(x=>x.effectiveDate!==s.effectiveDate),{effectiveDate:s.effectiveDate,house:0,taxes:s.taxes,...receipt}];}
     action='Finance settings updated; historical rates and payments preserved';
   }else return null;
   validateFinance(finance);

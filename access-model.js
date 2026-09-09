@@ -1,4 +1,4 @@
-export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'My stash'},{id:'ledger',name:'Treasury'},{id:'settings',name:'Settings'},{id:'access',name:'People & roles'},{id:'requests',name:'Join requests'}];
+export const accessPages=[{id:'roster',name:'Roster'},{id:'bands',name:'My stash'},{id:'ledger',name:'Treasury'},{id:'settings',name:'Settings'},{id:'access',name:'Accounts & access'},{id:'requests',name:'Join requests'}];
 export const accessLevels=['none','view','manage'];
 // Menu rearrangement is not an authorization change. Freeze affected grants.
 export function preserveNavigationPermissions(previous,next){

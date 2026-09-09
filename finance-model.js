@@ -14,12 +14,13 @@ export function stashBreakdown(entries){
   const bands=new Map();for(const e of entries.filter(e=>e.status==='pending'))for(const line of e.lines){const b=bands.get(line.id)||{id:line.id,name:line.name,color:line.color,quantity:0,amount:0};b.quantity+=line.quantity;b.amount+=line.quantity*line.price;bands.set(line.id,b);}return [...bands.values()];
 }
 export const emptyFinance=(now=Date.now())=>({version:1,startDate:nextThursday(financeDay(now)),deposits:[],payouts:[],bills:[]});
+// Keep historical house rates for validating old payments and backups.
 export const weeklyCosts=[{id:'house',name:'Gang house',amount:500000},{id:'taxes',name:'Gang taxes',amount:500000}];
 export function costsFor(finance,day){const schedule=(finance.schedules||[]).filter(s=>s.effectiveDate<=day).sort((a,b)=>b.effectiveDate.localeCompare(a.effectiveDate))[0];return weeklyCosts.map(c=>({...c,amount:schedule?schedule[c.id]:c.amount}));}
 export function weeklyBills(finance,now=Date.now()){
   const today=financeDay(now),end=nextThursday(today),rows=[];
   for(let due=finance.startDate;due<=end;){
-    for(const cost of costsFor(finance,due)){const paid=finance.bills.find(b=>b.dueDate===due&&b.kind===cost.id&&!isReversed(finance,b.id));rows.push({...cost,kind:cost.id,dueDate:due,...(paid||{}),status:paid?'paid':due<today?'overdue':due===today?'due':'upcoming'});}
+    for(const cost of costsFor(finance,due).filter(c=>c.id==='taxes')){const paid=finance.bills.find(b=>b.dueDate===due&&b.kind===cost.id&&!isReversed(finance,b.id));rows.push({...cost,kind:cost.id,dueDate:due,...(paid||{}),status:paid?'paid':due<today?'overdue':due===today?'due':'upcoming'});}
     const date=new Date(due+'T12:00:00Z');date.setUTCDate(date.getUTCDate()+7);due=date.toISOString().slice(0,10);
   }return rows;
 }

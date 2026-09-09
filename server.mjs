@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('.', import.meta.url));
 await mkdir(path.join(root,'.local'),{recursive:true});
 const key=await loadLocalKey(path.join(root,'.local'));
 let backupHealth={enabled:true,savedAt:null,error:null};
-const api=createDevApi({file:path.join(root,'.local','pto-dev.sqlite'),key,backupStatus:()=>backupHealth});
+const api=createDevApi({file:path.join(root,'.local','pto-dev.sqlite'),key,backupStatus:()=>backupHealth,cookieName:'pto_dev_session_4173'});
 const saveBackup=()=>dailyBackup(api,key,path.join(root,'.local','backups')).then(result=>{backupHealth={enabled:true,...result,error:null};}).catch(()=>{backupHealth={...backupHealth,error:'Automatic backup failed. Contact the site operator and download a backup below.'};console.error('Automatic backup failed. Check the private backup directory.');});
 await saveBackup();setInterval(saveBackup,60*60*1000).unref();
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.gif': 'image/gif', '.png': 'image/png' };

@@ -1,5 +1,29 @@
 # Workspace release — September 2026
 
+## September 9 — finance workspace release
+
+This release supersedes the interface and weekly-house-payment descriptions in the historical notes below. Releases use the content fingerprint in the generated `release.json`; the package manifest is not a separate application release counter.
+
+### User-facing changes
+
+- Focused navigation: My stash, Treasury, Roster, and permission-filtered Admin. Calendar, attendance, personal updates, and private-note screens are retired; their saved data remains in the workspace and backups.
+- Weekly house obligations are retired. Thursday gang taxes continue. Existing house payment receipts, reversals, schedules, and cashbook entries remain valid.
+- A compact login card includes an accessible password eye button, custom remember-me checkbox, clear retry feedback, and grouped access/help links. Registration keeps approval and identity requirements.
+- Fixed local remembered-session loss: main and sample previews now use different HttpOnly cookie names, preventing one preview's login or logout from replacing the other's session. Remembered sessions last up to 30 days; session-only cookies retain a 12-hour server limit. Cookie names change once for existing local previews, requiring a fresh local sign-in.
+- Custom dropdowns provide consistent chevrons, selected-option checkmarks, keyboard navigation, type-to-find, and screen-aware placement. Existing member/rank pickers share the same styling.
+- Page/section transitions respect reduced motion. Keyboard focus, skip navigation, labels, and phone controls are improved.
+- Website members appear by gang rank with online/offline status. Activity is website presence within two minutes, not a FiveM or Discord connection. The panel remembers its expanded state separately on desktop and mobile.
+- My stash and Treasury remember the last selected section. Settings shortcuts open the requested section directly. The optional security reminder can be dismissed per account/browser without changing authentication requirements.
+
+### Release checks and delivery
+
+- 90 automated tests passed, including local/hosted permissions, MFA and session expiry, finance history preservation, concurrency, and new cross-preview cookie-isolation/database-reopen regressions.
+- Browser checks covered login failure/retry, password visibility, registration layout, two remembered preview accounts, independent logout, navigation cancellation with an unsaved draft, and desktop/phone rendering.
+- Final static checks, Worker/Pages builds, manifest dependency verification, package contents, and bounded code review are recorded in `docs/RELEASE-PREP.md`.
+- Deploy the backend changes before the matching frontend. Keep the existing D1 database and account data. No data reset or destructive migration is part of this release.
+
+## Historical release notes
+
 ## September 6 finance simplification
 
 - My stash separates Add bands, Unpaid deposits, and History. Equal-width section buttons and consistent band rows make navigation and entry easier to scan.

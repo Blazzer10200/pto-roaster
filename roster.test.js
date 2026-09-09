@@ -28,5 +28,5 @@ test('roster filters search State IDs and render user text without interpreting 
   const rows=rosterRows(data,'01234');assert.match(rows,/&lt;img/);assert.doesNotMatch(rows,/<img src=x/);assert.doesNotMatch(rows,/Nico Vega/);
   data.members[0].status='archived';assert.doesNotMatch(rosterRows(data,'01234'),/data-edit-member/);
   assert.match(rosterRows(data,'01234','archived'),/data-edit-member/);
-  assert.match(rosterPage(data),/Gang roster/);assert.doesNotMatch(memberForm(data,data.members[0]),/<img src=x/);
+  assert.match(rosterPage(data),/<h1>Roster<\/h1>/);assert.doesNotMatch(memberForm(data,data.members[0]),/<img src=x/);
 });

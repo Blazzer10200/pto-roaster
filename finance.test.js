@@ -10,8 +10,8 @@ import {emptyFinance,weeklyBills,validateFinance,outstanding,depositTotal,financ
 import {enableMemberBands,enableFinanceRoles,initialAccess,permissionsFor} from './access-model.js';
 import {restoreSnapshot} from './backup-restore.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
-function fixture(t,hosted){
- const api=createDevApi({seed:sampleData()}),tokens={},names={owner:'Finance Owner',manager:'Finance Buddy',member:'Rocco Moretti',other:'Other Member',pending:'Waiting Member'};
+function fixture(t,hosted,seed=sampleData()){
+ const api=createDevApi({seed}),tokens={},names={owner:'Finance Owner',manager:'Finance Buddy',member:'Rocco Moretti',other:'Other Member',pending:'Waiting Member'};
  for(const [id,name] of Object.entries(names)){
   api.db.prepare('INSERT INTO users(id,name,email,username,password,owner,roles,approval) VALUES(?,?,?,?,?,?,?,?)').run(id,name,id+'@pto.invalid',id,'ab'.repeat(16)+':'+'cd'.repeat(64),Number(id==='owner'),JSON.stringify(id==='owner'?[]:id==='manager'?['treasurer']:['member']),id==='pending'?'pending':'approved');
   tokens[id]=randomBytes(32).toString('base64url');api.db.prepare('INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)').run(digest(tokens[id]),id,Date.now()+3600000);
@@ -30,6 +30,24 @@ function fixture(t,hosted){
  const call=async(path,{as='member',body,method=body?'POST':'GET'}={})=>{const response=await handle(new Request(origin+path,{method,headers:{Origin:origin,...(as?{Cookie:'pto_session='+tokens[as]}:{}),...(body?{'Content-Type':'application/json','X-Bandbook-Request':'1'}:{})},...(body?{body:JSON.stringify(body)}:{})}));return {status:response.status,payload:await response.json()};};
  return {call,snapshot};
 }
+for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} website member presence is roster-gated and sign-out removes online status`,async t=>{
+ const {call}=fixture(t,hosted);
+ assert.equal((await call('/api/presence/members',{as:''})).status,401);
+ assert.equal((await call('/api/presence/members',{as:'pending'})).status,403);
+ assert.equal((await call('/api/presence',{body:{page:'bands'}})).status,200);
+ let result=await call('/api/presence/members');assert.equal(result.status,200);
+ assert.equal(result.payload.members.find(u=>u.id==='member').online,true);
+ assert.ok(!result.payload.members.some(u=>u.id==='pending'));
+ assert.ok(result.payload.members.every(u=>Object.keys(u).sort().join(',')==='hasAccount,id,name,online,rank'));
+ assert.equal((await call('/api/presence')).status,403);
+ await call('/api/auth/logout',{body:{}});
+ result=await call('/api/presence/members',{as:'manager'});assert.equal(result.payload.members.find(u=>u.id==='member').online,false);
+ const config=(await call('/api/access',{as:'owner'})).payload;
+ config.roles.find(r=>r.id==='treasurer').pages.roster='none';
+ assert.equal((await call('/api/access',{as:'owner',body:config,method:'PUT'})).status,200);
+ assert.equal((await call('/api/presence/members',{as:'manager'})).status,403);
+});
+
 for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} finance: own deposits, locked rates, private balances, payouts, bills and history`,async t=>{
  const {call,snapshot}=fixture(t,hosted);
  assert.equal((await call('/api/finance',{as:''})).status,401);assert.equal((await call('/api/finance',{as:'pending'})).status,403);
@@ -43,7 +61,7 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} finance: own depo
  assert.equal((await call('/api/finance/deposits',{body:first})).payload.deposits.length,1);
  assert.equal((await call('/api/finance/deposits',{body:{...first,notes:'Different submission'}})).status,409);
  assert.equal((await call('/api/finance',{as:'other'})).payload.deposits.length,0);
- const manager=(await call('/api/finance',{as:'manager'})).payload;assert.equal(manager.deposits.length,1);assert.equal(manager.bills.length,2);assert.equal(manager.bills.reduce((n,b)=>n+b.amount,0),1000000);
+ const manager=(await call('/api/finance',{as:'manager'})).payload;assert.equal(manager.deposits.length,1);assert.equal(manager.bills.length,1);assert.equal(manager.bills.reduce((n,b)=>n+b.amount,0),500000);
  const payout={requestId:crypto.randomUUID(),userId:'member',expectedOutstanding:50000,expectedEntryIds:[first.requestId]};
  assert.equal((await call('/api/finance/payouts',{body:payout})).status,403);
  const second={...first,requestId:crypto.randomUUID(),lines:[{id:'band-2',quantity:2}]};assert.equal((await call('/api/finance/deposits',{body:second})).status,200);
@@ -57,12 +75,12 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} finance: own depo
  assert.equal((await call('/api/finance/deposits/'+third.requestId,{as:'manager',body:{decision:'reject',reason:'Please recount the stash'}})).status,200);
  own=(await call('/api/finance')).payload;assert.equal(own.deposits[0].reason,'Please recount the stash');assert.equal(outstanding(own.deposits),0);
  const managerDeposit={...first,requestId:crypto.randomUUID()};await call('/api/finance/deposits',{as:'manager',body:managerDeposit});assert.equal((await call('/api/finance/payouts',{as:'manager',body:{requestId:crypto.randomUUID(),userId:'manager',expectedOutstanding:50000,expectedEntryIds:[managerDeposit.requestId],owner:true}})).status,403);
- const bill={requestId:crypto.randomUUID(),kind:'house',dueDate:manager.startDate};assert.equal((await call('/api/finance/bills',{body:bill})).status,403);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'owner',body:{...bill,requestId:crypto.randomUUID()}})).status,409);
+ const bill={requestId:crypto.randomUUID(),kind:'taxes',dueDate:manager.startDate};assert.equal((await call('/api/finance/bills',{body:bill})).status,403);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'manager',body:bill})).status,200);assert.equal((await call('/api/finance/bills',{as:'owner',body:{...bill,requestId:crypto.randomUUID()}})).status,409);
  const ledger=(await call('/api/ledger',{as:'owner'})).payload;assert.equal(ledger.data.finance,undefined);assert.equal((await call('/api/ledger',{as:'owner',method:'PUT',body:{...ledger,data:{...ledger.data,finance:emptyFinance()}}})).status,403);
  const originalRate=own.deposits[1].lines[0].price;ledger.data.bands[1].price=99900;assert.equal((await call('/api/ledger',{as:'owner',method:'PUT',body:ledger})).status,200);
  const after=(await call('/api/finance')).payload;assert.equal(after.deposits[1].lines[0].price,originalRate);assert.equal((await call('/api/finance/deposits',{body:{...first,requestId:crypto.randomUUID()}})).status,409);
  const restored=restoreSnapshot(snapshot());t.after(()=>restored.close());const finance=JSON.parse(restored.snapshot().tables.workspace[0].document).finance;assert.equal(finance.deposits.length,4);assert.equal(finance.payouts.length,1);assert.equal(finance.bills.length,1);assert.equal(restored.db.prepare('SELECT count(*) AS count FROM sessions').get().count,0);
- const audit=(await call('/api/audit',{as:'owner'})).payload;assert.match(JSON.stringify(audit),/Band payout confirmed: Rocco Moretti/);assert.match(JSON.stringify(audit),/Gang house paid/);
+ const audit=(await call('/api/audit',{as:'owner'})).payload;assert.match(JSON.stringify(audit),/Band payout confirmed: Rocco Moretti/);assert.match(JSON.stringify(audit),/Gang taxes paid/);
 });
 for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} concurrent finance confirmations pay each deposit and weekly bill once`,async t=>{
  const {call}=fixture(t,hosted),initial=(await call('/api/finance')).payload;
@@ -128,9 +146,33 @@ for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} Owner can confirm
 });
 test('Thursday obligations cross weeks and Central-time midnight without erasing arrears',()=>{
  const f=emptyFinance(Date.parse('2026-09-09T15:00:00Z'));assert.equal(f.startDate,'2026-09-10');assert.equal(weeklyBills(f,Date.parse('2026-09-10T04:59:00Z'))[0].status,'upcoming');assert.equal(weeklyBills(f,Date.parse('2026-09-10T05:00:00Z'))[0].status,'due');
- const later=weeklyBills(f,Date.parse('2026-09-18T12:00:00Z'));assert.equal(later.length,6);assert.equal(later.filter(b=>b.status==='overdue').reduce((n,b)=>n+b.amount,0),2000000);assert.equal(financeDay(Date.parse('2026-11-02T05:59:00Z')),'2026-11-01');
+ const later=weeklyBills(f,Date.parse('2026-09-18T12:00:00Z'));assert.equal(later.length,3);assert.equal(later.filter(b=>b.status==='overdue').reduce((n,b)=>n+b.amount,0),1000000);assert.equal(financeDay(Date.parse('2026-11-02T05:59:00Z')),'2026-11-01');
  assert.throws(()=>validateFinance({...f,startDate:'2026-09-09'}));
 });
+for(const hosted of [false,true])test(`${hosted?'D1':'SQLite'} retired house obligations stay out of bills while historical payments and backups survive`,async t=>{
+ const seed=sampleData(),finance=emptyFinance(Date.parse('2026-09-02T12:00:00Z'));
+ const receipt={at:'2026-09-03T12:00:00Z',by:'owner',byName:'Finance Owner'};
+ finance.schedules=[{effectiveDate:'2026-09-03',house:700000,taxes:600000,...receipt}];
+ finance.bills=[{id:'old-house-payment',kind:'house',dueDate:'2026-09-03',amount:700000,...receipt}];
+ finance.cashEnabled=true;
+ finance.cashEntries=[{id:'old-house-cash',kind:'bill',amount:-700000,reason:'Gang house payment',...receipt}];
+ seed.finance=finance;
+ const {call,snapshot}=fixture(t,hosted,seed);
+ const current=(await call('/api/finance',{as:'owner'})).payload;
+ assert.ok(current.bills.length>0);assert.ok(current.bills.every(b=>b.kind==='taxes'&&b.amount===600000));
+ assert.equal(current.billPayments[0].id,'old-house-payment');assert.equal(current.cashBalance,-700000);
+ assert.equal((await call('/api/finance/bills',{as:'owner',body:{requestId:crypto.randomUUID(),kind:'house',dueDate:current.bills[0].dueDate}})).status,400);
+ const next=new Date(current.day+'T12:00:00Z');next.setUTCDate(next.getUTCDate()+14);const effectiveDate=new Date(next.getTime()+(4-next.getUTCDay()+7)%7*86400000).toISOString().slice(0,10);
+ const schedule={revision:current.revision,requireVerification:false,schedule:{effectiveDate,house:500000,taxes:650000}};
+ assert.equal((await call('/api/finance/settings',{as:'owner',body:schedule})).status,400);
+ delete schedule.schedule.house;
+ const changed=await call('/api/finance/settings',{as:'owner',body:schedule});assert.equal(changed.status,200);assert.equal(changed.payload.schedules.at(-1).house,0);
+ const restored=restoreSnapshot(snapshot());t.after(()=>restored.close());
+ const saved=JSON.parse(restored.snapshot().tables.workspace[0].document).finance;
+ assert.deepEqual(saved.bills,finance.bills);assert.deepEqual(saved.cashEntries,finance.cashEntries);assert.deepEqual(saved.schedules[0],finance.schedules[0]);
+ assert.doesNotThrow(()=>validateFinance(saved));
+});
+
 test('default member self-service migration is one-time and respects explicit restrictions',()=>{
  const c=initialAccess();delete c.financeAccessVersion;delete c.roles[1].pages.bands;assert.equal(enableMemberBands(c),true);assert.equal(c.roles[1].pages.bands,'view');c.roles[1].pages.bands='none';assert.equal(enableMemberBands(c),false);assert.equal(c.roles[1].pages.bands,'none');
  delete c.financeAccessVersion;assert.equal(enableMemberBands(c),true);assert.equal(c.roles[1].pages.bands,'none');

@@ -4,7 +4,7 @@ import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'n
 import {promisify} from 'node:util';
 import {createSecurity,securitySchema} from './security-store.mjs';
 import {freshData,validateBackup} from './model.js';
-import {onlineUsers} from './presence.js';
+import {onlineUsers,memberPresence} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
 import {hubRequest} from './hub-model.js';
@@ -24,7 +24,8 @@ function accountFields(body,required=true){
   if(!name||name.length>60||!username||!/^[a-z0-9_.-]{3,32}$/.test(username))throw Error('Enter your in-character name and a username of 3–32 letters, numbers, dots, underscores, or hyphens.');
   return {...profileFields({...body,name,username},{required}),email:legacyEmail||crypto.randomUUID()+'@pto.invalid'};
 }
-export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,backupStatus=()=>({enabled:false})}={}){
+export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,backupStatus=()=>({enabled:false}),cookieName='pto_session'}={}){
+  if(!/^[a-zA-Z0-9_-]{1,80}$/.test(cookieName))throw Error('Invalid development session cookie name.');
   if(!key&&file!==':memory:')throw Error('A persistent encryption key is required for this database.');
   key=key||randomBytes(32);
   const db=new DatabaseSync(file);
@@ -64,7 +65,7 @@ export function createDevApi({file=':memory:',seed=freshData(),key,now=Date.now,
   const writeProfile=u=>db.prepare('UPDATE users SET name=?,username=?,stateId=?,phone=?,profileRevision=? WHERE id=?').run(u.name,u.username,u.stateId,u.phone,u.profileRevision,u.id);
   const writeMembers=(data,revision)=>db.prepare('UPDATE workspace SET document=?,revision=? WHERE id=1').run(JSON.stringify(data),revision+1);
   const audit=(id,action,document=null)=>db.prepare('INSERT INTO audit(at,user_id,action,document) VALUES(?,?,?,?)').run(new Date().toISOString(),id,action,auditDocument(db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name,document));
-  const cookieToken=request=>(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('pto_session='))?.slice(12)||'';
+  const cookieToken=request=>(request.headers.get('cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';
   const auth=request=>{
     const session=db.prepare('SELECT users.*,sessions.mfa_verified,sessions.remember AS session_remember FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.hash=? AND sessions.expires>? AND users.disabled=0').get(digest(cookieToken(request)),now());
     return session?publicUser(session):null;
@@ -73,7 +74,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
   const newSession=(user,verified=false,remember=!!user.remembered)=>{
     db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
     const token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO sessions(hash,user_id,expires,mfa_verified,remember) VALUES(?,?,?,?,?)').run(digest(token),user.id,now()+(remember?2592000000:43200000),Number(verified),Number(remember));
-    return json(sessionData({...user,mfaVerified:verified,remembered:remember}),200,{'Set-Cookie':`pto_session=${token}; HttpOnly; SameSite=Strict; Path=/${remember?'; Max-Age=2592000':''}`});
+    return json(sessionData({...user,mfaVerified:verified,remembered:remember}),200,{'Set-Cookie':`${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remember?'; Max-Age=2592000':''}`});
   };
   const snapshot=()=>({format:'pto-full-backup',version:1,createdAt:new Date().toISOString(),key:key.toString('base64'),tables:Object.fromEntries(['users','config','workspace','audit','account_security','recovery_codes','security_policy'].map(table=>[table,db.prepare('SELECT * FROM '+table).all().map(row=>table==='account_security'?{...row,pending:null,pending_until:null}:row)]))});
   const security=createSecurity({db,key,auth,publicUser,newSession,config,audit,digest,verifyPassword,hashPassword,validatePassword,json,snapshot,now,backupStatus});
@@ -128,7 +129,7 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
       if(!user)return json({error:'Sign in to continue.'},401);
       const permissions=permissionsFor(user,config());
       if(route==='/api/auth/logout'&&method==='POST'){
-        db.prepare('DELETE FROM sessions WHERE hash=?').run(digest(cookieToken(request)));return json({ok:true},200,{'Set-Cookie':'pto_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});
+        db.prepare('DELETE FROM sessions WHERE hash=?').run(digest(cookieToken(request)));return json({ok:true},200,{'Set-Cookie':cookieName+'=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});
       }
       if(route==='/api/auth/password'&&method==='POST'){
         validatePassword(body.password);await security.reauthenticate(request,body,user);const previous=db.prepare('SELECT password FROM users WHERE id=?').get(user.id).password;
@@ -147,6 +148,11 @@ const sessionData=user=>{const access=config(),permissions=permissionsFor(user,a
           if(proposal.action){db.exec('BEGIN IMMEDIATE');try{if(proposal.user)writeProfile(proposal.user);if(proposal.deletedUser){for(const table of ['sessions','login_challenges','recovery_codes','account_security'])db.prepare('DELETE FROM '+table+' WHERE user_id=?').run(proposal.deletedUser);db.prepare('DELETE FROM users WHERE id=?').run(proposal.deletedUser);}if(proposal.nextData)writeMembers(proposal.nextData,current.revision);audit(user.id,proposal.action);db.exec('COMMIT');}catch(error){db.exec('ROLLBACK');throw error;}}
           return json(proposal.payload);
         }
+      }
+      if(route==='/api/presence/members'&&method==='GET'){
+        if(!permits(permissions,'roster'))return json({error:'Roster access required.'},403);
+        const sessions=db.prepare('SELECT sessions.user_id,sessions.expires,presence.last_seen,presence.page FROM presence JOIN sessions ON sessions.hash=presence.session_hash').all();
+        return json(memberPresence(sessions,allUsers(),rawLedger().data,now()));
       }
       if(route==='/api/presence'){
         if(method==='GET'){

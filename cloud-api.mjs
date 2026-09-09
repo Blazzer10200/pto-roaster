@@ -3,7 +3,7 @@ import {randomBytes,createHash,scrypt as scryptCallback,timingSafeEqual} from 'n
 import {Buffer} from 'node:buffer';
 import {promisify} from 'node:util';
 import {applyOwnerPasswordReset} from './owner-password-reset.mjs';
-import {onlineUsers} from './presence.js';
+import {onlineUsers,memberPresence} from './presence.js';
 import {profileOf,profileFields,uniqueProfile,updatedProfile,attachMember,memberRequest,assertLinkedMembers} from './member-profile.js';
 import {changeVersions} from './change-versions.js';
 import {hubRequest} from './hub-model.js';
@@ -168,6 +168,9 @@ export async function handleCloudApi(request,env){
             if(proposal.action)audit(user.id,proposal.action);
             return json(proposal.payload);
           }
+        }
+        if(route==='/api/presence/members'&&method==='GET'){
+          requirePage('roster');return json(memberPresence(s.sessions,s.users,validateBackup(JSON.parse(s.workspace.document)),now));
         }
         if(route==='/api/presence'){
           if(method==='GET'){requirePage('access','manage');return json({users:onlineUsers(s.sessions,s.users,now)});}

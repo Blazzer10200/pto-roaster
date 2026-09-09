@@ -1,0 +1,48 @@
+# PTO project workflow
+
+Keep work focused on the user's current request. This file maps the project; it does not authorize publishing or changing live data.
+
+## Start here
+
+- Work from this repository. Read the current-status and next-action sections of HANDOFF.md when present; check dated claims against the current diff before using them as current behavior. Do not replay completed work.
+- Run `git status --short` once. Preserve the user's existing edits.
+- `npm run dev:status` checks the local preview at http://127.0.0.1:4173/.
+- `npm run dev:start` reuses a healthy running preview or starts it hidden. It does not reset the database or login.
+- `npm run dev:sample` reuses/starts a separate sample preview at http://127.0.0.1:4174/. Only this preview is for test deposits, payments, approvals, and removals.
+- Static browser files are served from disk: reload after changing them. Server imports need a restart. `npm run dev:restart` only stops a process whose PID, creation time, and script match the launcher's private record; inspect older manually started processes explicitly.
+
+## Find the right code
+
+| Concern | Start with |
+| --- | --- |
+| Routes, header, page mounting | app.js: routeNames, followRoute, render |
+| Stash, Treasury, finance settings | finance-ui.js: mountFinance |
+| Money rules, receipts, bills | finance-model.js, finance-api.js |
+| Roster and identity editing | roster.js, profile-ui.js, member-profile.js |
+| Login, approvals, roles | auth-ui.js, access-model.js |
+| Member sidebar and activity | presence-ui.js, presence.js |
+| Local / hosted endpoints | dev-api.mjs / cloud-api.mjs |
+| Current layout overrides | experience.css; then the relevant domain stylesheet |
+| Browser asset/build boundary | client-files.mjs, build-client.mjs |
+
+Search anchored symbols with `rg -n`; avoid dumping minified CSS or whole large modules. Inspect both API adapters when changing endpoint behavior. Shared business logic belongs in the shared modules.
+
+## Browser work
+
+- Resolve tabs by exact origin each turn when a handle is stale; tab IDs change. Reuse the selected browser and existing matching tabs. Follow the browser tool's documented API.
+- 4173 is the user's separate local database; 4174 is disposable sample data. Neither is production. Do not copy production data to make a screenshot.
+- Preserve the user's signed-in session and unfinished forms. Do not restart a healthy server or sign the user out merely to check another role; use the sample preview.
+- Use named controls or the existing `data-page`, `data-access-tab`, and `data-treasury-tab` attributes. Batch independent inspection; observe state after actions. See docs/DEVELOPMENT.md for routes and sample accounts.
+- Login credentials are private. Never print password/token files or include their contents in tool output, commands, docs, or screenshots. Use the authorized browser form; do not add a login bypass.
+- Verify affected routes once at the sizes relevant to the change. Measure overflow against `document.documentElement.clientWidth`. Reset temporary viewport overrides and retain the user's preview tab.
+
+## Verification without repetition
+
+- CSS/copy: inspect the affected page and phone layout; `git diff --check`. Do not rerun unrelated backend tests.
+- JavaScript changes: `npm run check` and the affected behavior below.
+- Money, bills, or presence: `npm run test:finance`.
+- Identity, permissions, approvals: `npm run test:access`.
+- Storage/security/API changes spanning both adapters: `npm test`.
+- Before publication or a build-boundary change: `npm run verify:build`. This builds and verifies locally; it does not publish.
+- Reuse passed checks when their inputs have not changed. Repeat after a relevant change, failure, or unresolved concern. Report the actual scope; focused tests are not the full suite.
+- Keep the final report about visible behavior, verification, and remaining limitations. Do not substitute a plan or a checklist for the requested work.
